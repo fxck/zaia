@@ -1,0 +1,37 @@
+zerops:
+  - setup: goose
+    run:
+      base: ubuntu@22.04
+      prepareCommands:
+        - curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash
+        - mkdir -p ~/.config/goose
+        - mkdir -p ~/.ssh
+        - |
+          cat > ~/.ssh/config << 'EOF'
+          Host *
+              StrictHostKeyChecking no
+              UserKnownHostsFile /dev/null
+          EOF
+        - |
+          cat > ~/.config/goose/config.yaml << 'EOF'
+          extensions:
+            developer:
+              bundled: true
+              enabled: true
+              name: developer
+              timeout: 300
+              type: builtin
+            
+            memory:
+              bundled: true
+              enabled: true
+              name: memory
+              timeout: 300
+              type: builtin
+          EOF
+      envVariables:
+        GOOSE_PROVIDER: anthropic
+        GOOSE_MODEL: claude-sonnet-4-20250514
+        GOOSE_DISABLE_KEYRING: true
+        CONFIGURE: false
+      start: zsc noop --silent
