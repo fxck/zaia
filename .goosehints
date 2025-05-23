@@ -13,6 +13,10 @@ zcli login $ZEROPS_ACCESS_TOKEN
 
 # STEP 2: Discover project architecture  
 zcli service list --projectId $projectId
+
+# STEP 3: Build inner knowledge about envs
+list env keys and group them by different services hostname, memoize and utilize
+
 ```
 
 ---
