@@ -36,6 +36,7 @@ zerops:
       envVariables:
         GOOSE_PROVIDER: anthropic
         GOOSE_MODEL: claude-sonnet-4-20250514
+        GOOSE_TEMPERATURE: 0.3
         GOOSE_DISABLE_KEYRING: true
         CONFIGURE: false
         PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium-browser
