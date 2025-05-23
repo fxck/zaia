@@ -4,10 +4,8 @@ zerops:
       base: ubuntu@22.04
       prepareCommands:
         - curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash
-        # ADD sudo to these commands:
         - sudo apt-get update -y
         - sudo apt-get install -y chromium-browser
-        - curl -fsSL https://github.com/zeropsio/zcli/releases/latest/download/zcli_linux_amd64.tar.gz | sudo tar -xz -C /usr/local/bin
         - sudo apt-get clean -y
         - sudo rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
         - mkdir -p ~/.config/goose
@@ -41,7 +39,6 @@ zerops:
         GOOSE_DISABLE_KEYRING: true
         CONFIGURE: false
         PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium-browser
-        ZEROPS_ACCESS_TOKEN: ${goose_token}
       initCommands:
         - zcli login $ZEROPS_ACCESS_TOKEN
       start: zsc noop --silent
