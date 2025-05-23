@@ -23,8 +23,8 @@ You have Chromium installed locally on YOUR agent container. Use it to test fron
 
 TESTING FLOW EXAMPLES:
 - Debug API service: `curl -v http://api:3000/health`
-- Debug frontend on ales: `chromium-browser --headless --disable-gpu --dump-dom http://ales:3000/`
-- Check console errors on ales: `chromium-browser --headless --disable-gpu --virtual-time-budget=5000 --enable-logging --log-level=0 http://ales:3000/ 2>&1 | grep -E "(console|error|warning)"`
+- Debug frontend on dev1: `chromium-browser --headless --disable-gpu --dump-dom http://dev1:3000/`
+- Check console errors on dev1: `chromium-browser --headless --disable-gpu --virtual-time-budget=5000 --enable-logging --log-level=0 http://dev1:3000/ 2>&1 | grep -E "(console|error|warning)"`
 - Screenshot production frontend: `chromium-browser --headless --disable-gpu --screenshot=/tmp/api-frontend.png http://api:3000/`
 
 OUTPUT PATTERN:
@@ -80,7 +80,7 @@ services:
   # the service we can develop on, the actual build config used matches the hostname and is extended from a base
   # it has vscode server installed for user to check on your changes and do their own development
   # you can use `zcli push` from this service to trigger the build pipeline on the production app
-  - hostname: ales
+  - hostname: dev1
     type: nodejs@22
     zeropsYaml:
       zerops:
@@ -124,6 +124,6 @@ services:
                   httpSupport: true        
             start: code-server --auth none --bind-addr 0.0.0.0:8080 /var/www
       
-        - setup: ales
+        - setup: dev1
           extends: cderemote
 ```
