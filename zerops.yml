@@ -39,6 +39,4 @@ zerops:
         GOOSE_DISABLE_KEYRING: true
         CONFIGURE: false
         PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium-browser
-      initCommands:
-        - zcli login $ZEROPS_ACCESS_TOKEN
       start: zsc noop --silent
