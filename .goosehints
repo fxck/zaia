@@ -86,38 +86,5 @@ services:
       
         - setup: ales
           extends: cderemote
-
 ```
-- this is description of the app:
-
-```
-This is a Node.js application built with Express.js and TypeScript, designed to run on the Zerops platform.
-
-**Core Functionality:**
-
-* The application exposes a primary endpoint (`/`) that, upon each request, adds a new entry (a UUID) to a PostgreSQL database and returns the total count of entries.
-* It also includes a `/status` endpoint to check the application's health, which returns a simple "UP" status.
-
-**Key Features & Technologies:**
-
-* **Backend:** Node.js with Express.js framework.
-* **Language:** TypeScript.
-* **Database:** PostgreSQL. The application connects to a PostgreSQL database, creates an `entries` table if it doesn't exist, and stores data in it.
-* **Deployment:** Configured for deployment on Zerops, utilizing Zerops' built-in environment variables for database credentials and log management.
-* **Environment Configuration:** Uses `dotenv` for managing environment variables, particularly for database connection details (host, port, username, password, database name).
-* **Build Process:** The application is built using `npm run build` (which executes `npx tsc`), compiling TypeScript to JavaScript in a `./dist` directory.
-* **Development & Production Scripts:**
-    * `npm start`: Runs the application using `ts-node` for development.
-    * `npm run dev`: Uses `nodemon` for development with automatic restarts.
-    * `npm run start:prod`: Runs the compiled JavaScript application from the `./dist` directory for production.
-
-**Recipe Features (from README):**
-
-* Node.js / Express.js app running on a load-balanced Zerops Node.js service.
-* Zerops PostgreSQL 16 service as a database.
-* Healthcheck setup example.
-* Utilization of Zerops' built-in environment variables system.
-* Utilization of Zerops' built-in log management.
-```
-
 - when you are asked to deploy to stage, it means you should `zcli push --serviceId=${serviceId}` (when ran from the remote container with ssh)
