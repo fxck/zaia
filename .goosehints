@@ -21,6 +21,34 @@ You have Chromium installed locally on YOUR agent container. Use it to test fron
 - Capture console errors from remote frontends: `chromium-browser --headless --disable-gpu --virtual-time-budget=5000 --enable-logging --log-level=0 http://hostname:port/ 2>&1 | grep -E "(console|error|warning)"`
 - Screenshot remote frontends: `chromium-browser --headless --disable-gpu --screenshot=/tmp/debug.png http://hostname:port/`
 
+PROCESS MANAGEMENT - CRITICAL FOR LONG-RUNNING TASKS:
+
+BACKGROUND EXECUTION RULES:
+- Development servers (npm run dev, npm start, python -m http.server, etc.) = ALWAYS run in background
+- Build processes (npm run build, npm install) = Run normally (they terminate)
+- Database operations (migrations, seeds) = Run normally (they terminate)  
+- File operations (copying, editing) = Run normally (they terminate)
+
+BACKGROUND EXECUTION PATTERNS:
+- SSH + background process: `ssh hostname "cd /var/www && nohup npm run dev > /dev/null 2>&1 & echo 'Process started'"` 
+- SSH + verification: `ssh hostname "cd /var/www && npm run dev & sleep 3 && curl -s http://localhost:3000 && echo 'Server responding'"
+- SSH + tmux session: `ssh hostname "tmux new-session -d -s dev 'cd /var/www && npm run dev'"` 
+
+PROCESS VERIFICATION (instead of waiting):
+- Check if process started: `ssh hostname "ps aux | grep 'npm run dev'"` 
+- Test service response: `curl -v http://hostname:3000/`
+- Check logs: `ssh hostname "tail -f /var/www/logs/app.log"` (if available)
+
+NEVER DO:
+- `ssh hostname "npm run dev"` (will hang forever)
+- Wait for long-running processes to "complete"
+- Run development servers without background execution
+
+ALWAYS DO:
+- Background long-running processes with `&` or `nohup`
+- Verify process started with ps/curl/ping
+- Give clear status updates ("Starting dev server...", "Server responding on port 3000")
+
 TESTING FLOW EXAMPLES:
 - Debug API service: `curl -v http://api:3000/health`
 - Debug frontend on dev1: `chromium-browser --headless --disable-gpu --dump-dom http://dev1:3000/`
