@@ -1,11 +1,13 @@
 zerops:
   - setup: goose
     run:
-      base: ubuntu@22.04
+      os: ubuntu
+      base: nodejs@22
       prepareCommands:
         - curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash
         - sudo apt-get update -y
         - sudo apt-get install -y chromium-browser
+        - sudo npm install -g puppeteer
         - sudo apt-get clean -y
         - sudo rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
         - mkdir -p ~/.config/goose
@@ -40,4 +42,6 @@ zerops:
         GOOSE_DISABLE_KEYRING: true
         CONFIGURE: false
         PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium-browser
+        PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: true
+        CHROME_DEVEL_SANDBOX: /usr/lib/chromium-browser/chrome-sandbox
       start: zsc noop --silent
