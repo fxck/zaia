@@ -9,13 +9,13 @@
 ### First Action: Authentication & Project Discovery
 ```bash
 # STEP 1: Authenticate (REQUIRED before any zcli commands)
-zcli login $ZEROPS_ACCESS_TOKEN
+Run `zcli login $ZEROPS_ACCESS_TOKEN`
 
 # STEP 2: Discover project architecture  
-zcli service list --projectId $projectId
+Run `zcli service list --projectId $projectId`
 
 # STEP 3: Build inner knowledge about envs
-list env keys and group them by different services hostname, memoize and utilize
+List all envs on YOUR container, groups them by service hostname you got from step 2 (e.g. there will be multiple variables prefixed with `db_` for `db` service)
 
 ```
 
