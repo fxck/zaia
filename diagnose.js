@@ -11,6 +11,7 @@ async function diagnoseWebPage(url, options = {}) {
     warnings: [],
     networkIssues: [],
     loadingProblems: [],
+    performance: {},
     pageInfo: {}
   };
 
@@ -19,37 +20,29 @@ async function diagnoseWebPage(url, options = {}) {
     browser = await puppeteer.launch({
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
       headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu'
-      ]
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
 
     const page = await browser.newPage();
 
-    // Console message capture
+    // Capture console errors
     page.on('console', msg => {
       const type = msg.type();
-      const text = msg.text();
-      
       if (type === 'error') {
         results.errors.push({
           type: 'console_error',
-          message: text,
+          message: msg.text(),
           location: msg.location()
         });
       } else if (type === 'warning') {
         results.warnings.push({
           type: 'console_warning',
-          message: text,
-          location: msg.location()
+          message: msg.text()
         });
       }
     });
 
-    // Page errors (uncaught exceptions)
+    // Capture page errors
     page.on('pageerror', error => {
       results.errors.push({
         type: 'page_error',
@@ -58,7 +51,7 @@ async function diagnoseWebPage(url, options = {}) {
       });
     });
 
-    // Network request failures
+    // Network failures
     page.on('requestfailed', request => {
       results.networkIssues.push({
         type: 'request_failed',
@@ -68,22 +61,22 @@ async function diagnoseWebPage(url, options = {}) {
       });
     });
 
-    // HTTP error responses
+    // HTTP errors
     page.on('response', response => {
-      const status = response.status();
-      if (status >= 400) {
+      if (response.status() >= 400) {
         results.networkIssues.push({
           type: 'http_error',
           url: response.url(),
-          status: status,
-          statusText: response.statusText(),
-          resourceType: response.request().resourceType()
+          status: response.status(),
+          statusText: response.statusText()
         });
       }
     });
 
-    // Navigate to page with timeout
+    // Performance timing
     const startTime = Date.now();
+
+    // Navigate
     try {
       await page.goto(url, { 
         waitUntil: 'networkidle2',
@@ -97,108 +90,100 @@ async function diagnoseWebPage(url, options = {}) {
       return results;
     }
 
-    const loadTime = Date.now() - startTime;
-    results.pageInfo.loadTime = loadTime;
+    results.performance.loadTime = Date.now() - startTime;
 
-    // Get basic page info
+    // Get page info
     results.pageInfo.title = await page.title();
     results.pageInfo.url = page.url();
     
-    // Check for specific loading indicators
+    // Check selectors
     if (options.checkSelectors) {
-      const selectorChecks = {};
+      results.pageInfo.selectorChecks = {};
       for (const selector of options.checkSelectors) {
-        try {
-          const element = await page.$(selector);
-          selectorChecks[selector] = !!element;
-          if (!element) {
-            results.loadingProblems.push({
-              type: 'missing_element',
-              selector: selector,
-              message: `Required element "${selector}" not found`
-            });
-          }
-        } catch (error) {
-          selectorChecks[selector] = false;
+        const exists = !!(await page.$(selector));
+        results.pageInfo.selectorChecks[selector] = exists;
+        if (!exists) {
           results.loadingProblems.push({
-            type: 'selector_error',
-            selector: selector,
-            message: error.message
+            type: 'missing_element',
+            selector: selector
           });
         }
       }
-      results.pageInfo.selectorChecks = selectorChecks;
     }
 
-    // Check for common loading indicators
-    const commonChecks = await page.evaluate(() => {
-      return {
-        hasLoadingSpinners: document.querySelectorAll('[class*="loading"], [class*="spinner"]').length > 0,
-        hasErrorMessages: document.querySelectorAll('[class*="error"], [id*="error"]').length > 0,
-        bodyContentLength: document.body.textContent.trim().length,
-        imageCount: document.images.length,
-        scriptCount: document.scripts.length
-      };
-    });
+    // Check page content
+    const content = await page.evaluate(() => ({
+      hasContent: document.body.textContent.trim().length > 100,
+      hasLoaders: document.querySelectorAll('[class*="loading"]').length > 0,
+      errorElements: document.querySelectorAll('[class*="error"]').length
+    }));
     
-    results.pageInfo = { ...results.pageInfo, ...commonChecks };
-
-    // Check if page seems "empty" or broken
-    if (commonChecks.bodyContentLength < 100) {
+    if (!content.hasContent) {
       results.loadingProblems.push({
         type: 'minimal_content',
-        message: 'Page appears to have very little content (< 100 characters)'
+        message: 'Page has very little content'
       });
     }
 
-    if (commonChecks.hasLoadingSpinners) {
+    if (content.hasLoaders) {
       results.loadingProblems.push({
         type: 'persistent_loading',
-        message: 'Loading spinners still visible, page may not have finished loading'
+        message: 'Loading indicators still visible'
       });
     }
 
-  } catch (error) {
-    results.errors.push({
-      type: 'script_error',
-      message: error.message,
-      stack: error.stack
-    });
-  } finally {
-    if (browser) {
-      await browser.close();
+    // Performance metrics
+    if (options.performance) {
+      const metrics = await page.metrics();
+      results.performance.metrics = metrics;
     }
+
+    // Screenshots
+    if (options.screenshots) {
+      const screenshotPath = `/tmp/screenshot_${Date.now()}.png`;
+      await page.screenshot({ path: screenshotPath });
+      results.pageInfo.screenshot = screenshotPath;
+    }
+
+  } finally {
+    if (browser) await browser.close();
   }
 
   return results;
 }
 
-// CLI Interface
+// CLI
 async function main() {
   const args = process.argv.slice(2);
-  
   if (args.length === 0) {
     console.log('Usage: node diagnose.js <url> [options]');
     console.log('Options:');
-    console.log('  --timeout <ms>           Set timeout in milliseconds');
-    console.log('  --check-selector <sel>   Check for specific CSS selector');
-    console.log('  --output <file>          Save results to JSON file');
-    console.log('  --quiet                  Only output errors and warnings');
+    console.log('  --check-selector <sel>  Check for CSS selector');
+    console.log('  --timeout <ms>          Set timeout');
+    console.log('  --performance           Capture performance metrics');
+    console.log('  --screenshots           Take screenshots');
+    console.log('  --output <file>         Save results to file');
+    console.log('  --quiet                 Minimal output');
     process.exit(1);
   }
 
   const url = args[0];
   const options = {};
   
-  // Parse command line options
   for (let i = 1; i < args.length; i++) {
     switch (args[i]) {
-      case '--timeout':
-        options.timeout = parseInt(args[++i]);
-        break;
       case '--check-selector':
         if (!options.checkSelectors) options.checkSelectors = [];
         options.checkSelectors.push(args[++i]);
+        break;
+      case '--timeout':
+        options.timeout = parseInt(args[++i]);
+        break;
+      case '--performance':
+        options.performance = true;
+        break;
+      case '--screenshots':
+        options.screenshots = true;
         break;
       case '--output':
         options.outputFile = args[++i];
@@ -210,10 +195,8 @@ async function main() {
   }
 
   console.log(`🔍 Diagnosing: ${url}`);
-  
   const results = await diagnoseWebPage(url, options);
   
-  // Output results
   if (options.outputFile) {
     fs.writeFileSync(options.outputFile, JSON.stringify(results, null, 2));
     console.log(`📄 Results saved to: ${options.outputFile}`);
@@ -221,43 +204,31 @@ async function main() {
 
   if (!options.quiet) {
     console.log(`📊 Page Info:`, results.pageInfo);
+    if (results.performance.loadTime) {
+      console.log(`⏱️  Load time: ${results.performance.loadTime}ms`);
+    }
   }
 
   if (results.errors.length > 0) {
     console.log(`❌ Errors (${results.errors.length}):`);
-    results.errors.forEach(error => {
-      console.log(`  • ${error.type}: ${error.message}`);
-    });
-  }
-
-  if (results.warnings.length > 0) {
-    console.log(`⚠️  Warnings (${results.warnings.length}):`);
-    results.warnings.forEach(warning => {
-      console.log(`  • ${warning.type}: ${warning.message}`);
-    });
+    results.errors.forEach(e => console.log(`  • ${e.type}: ${e.message}`));
   }
 
   if (results.networkIssues.length > 0) {
     console.log(`🌐 Network Issues (${results.networkIssues.length}):`);
-    results.networkIssues.forEach(issue => {
-      console.log(`  • ${issue.type}: ${issue.url} - ${issue.error || issue.status}`);
-    });
+    results.networkIssues.forEach(i => console.log(`  • ${i.type}: ${i.url}`));
   }
 
   if (results.loadingProblems.length > 0) {
-    console.log(`⏳ Loading Problems (${results.loadingProblems.length}):`);
-    results.loadingProblems.forEach(problem => {
-      console.log(`  • ${problem.type}: ${problem.message}`);
-    });
+    console.log(`⏳ Loading Problems:`)
+    results.loadingProblems.forEach(p => console.log(`  • ${p.type}: ${p.message || p.selector}`));
   }
 
-  if (results.errors.length === 0 && results.networkIssues.length === 0 && results.loadingProblems.length === 0) {
+  if (results.errors.length === 0 && results.networkIssues.length === 0) {
     console.log('✅ No issues detected!');
   }
 
-  // Exit with error code if issues found
-  const hasIssues = results.errors.length > 0 || results.networkIssues.length > 0 || results.loadingProblems.length > 0;
-  process.exit(hasIssues ? 1 : 0);
+  process.exit(results.errors.length > 0 ? 1 : 0);
 }
 
 if (require.main === module) {

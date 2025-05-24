@@ -1,5 +1,5 @@
 zerops:
-  - setup: goose
+  - setup: zaia
     run:
       os: ubuntu
       base: nodejs@22
@@ -27,7 +27,7 @@ zerops:
               name: developer
               timeout: 300
               type: builtin
-            
+
             memory:
               bundled: true
               enabled: true
