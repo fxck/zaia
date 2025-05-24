@@ -78,9 +78,9 @@ async function diagnoseWebPage(url, options = {}) {
 
     // Navigate
     try {
-      await page.goto(url, { 
+      await page.goto(url, {
         waitUntil: 'networkidle2',
-        timeout: options.timeout || 30000 
+        timeout: options.timeout || 30000
       });
     } catch (error) {
       results.errors.push({
@@ -95,7 +95,7 @@ async function diagnoseWebPage(url, options = {}) {
     // Get page info
     results.pageInfo.title = await page.title();
     results.pageInfo.url = page.url();
-    
+
     // Check selectors
     if (options.checkSelectors) {
       results.pageInfo.selectorChecks = {};
@@ -117,7 +117,7 @@ async function diagnoseWebPage(url, options = {}) {
       hasLoaders: document.querySelectorAll('[class*="loading"]').length > 0,
       errorElements: document.querySelectorAll('[class*="error"]').length
     }));
-    
+
     if (!content.hasContent) {
       results.loadingProblems.push({
         type: 'minimal_content',
@@ -169,7 +169,7 @@ async function main() {
 
   const url = args[0];
   const options = {};
-  
+
   for (let i = 1; i < args.length; i++) {
     switch (args[i]) {
       case '--check-selector':
@@ -196,7 +196,7 @@ async function main() {
 
   console.log(`🔍 Diagnosing: ${url}`);
   const results = await diagnoseWebPage(url, options);
-  
+
   if (options.outputFile) {
     fs.writeFileSync(options.outputFile, JSON.stringify(results, null, 2));
     console.log(`📄 Results saved to: ${options.outputFile}`);

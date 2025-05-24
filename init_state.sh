@@ -5,19 +5,16 @@ source /var/www/validate_inputs.sh
 
 echo "=== INITIALIZING PROJECT STATE ==="
 
-# Check authentication
 if ! zcli project list >/dev/null 2>&1; then
     echo "Authenticating..."
     zcli login "$ZEROPS_ACCESS_TOKEN"
 fi
 
-# Backup existing state
 if [ -f /var/www/.zaia ]; then
     cp /var/www/.zaia /var/www/.zaia.backup
     echo "Existing state backed up"
 fi
 
-# Get project export
 echo "Fetching project configuration..."
 if ! curl -s -H "Authorization: Bearer $ZEROPS_ACCESS_TOKEN" \
      "https://api.app-prg1.zerops.io/api/rest/public/project/$projectId/export" \
@@ -26,24 +23,36 @@ if ! curl -s -H "Authorization: Bearer $ZEROPS_ACCESS_TOKEN" \
     exit 1
 fi
 
-# Validate export
-# First check if the 'yaml' key exists and its content has a project name
-if ! jq -e '.yaml' /tmp/project_export.yaml >/dev/null 2>&1 || \
-   ! (jq -r '.yaml' /tmp/project_export.yaml | yq e '.project.name' - >/dev/null 2>&1); then
-    echo "❌ Invalid export data or missing project name in YAML content."
+if ! jq -e '.yaml' /tmp/project_export.yaml >/dev/null 2>&1; then
+    echo "❌ Invalid export data - missing 'yaml' key"
     echo "Debug: Content of /tmp/project_export.yaml:"
-    cat /tmp/project_export.yaml | head -n 10 # Show first few lines for debugging
+    cat /tmp/project_export.yaml | head -n 10
     exit 1
 fi
 
-# Corrected line to extract project name
-PROJECT_NAME=$(jq -r '.yaml' /tmp/project_export.yaml | yq e '.project.name' -)
+YAML_CONTENT=$(jq -r '.yaml' /tmp/project_export.yaml)
+if [ -z "$YAML_CONTENT" ] || [ "$YAML_CONTENT" == "null" ]; then
+    echo "❌ Invalid YAML content in export"
+    exit 1
+fi
 
-# Initialize .zaia
-# Ensure the directory for .zaia exists and is writable if not in /var/www
-# For this script, it's creating ./.zaia, so it depends on where the script is run from.
-# If you intend it to always be /var/www/.zaia, change the path:
-ZAIA_FILE_PATH="/var/www/.zaia" # Define path for clarity
+PROJECT_NAME=$(echo "$YAML_CONTENT" | yq e '.project.name' - 2>/dev/null)
+if [ -z "$PROJECT_NAME" ] || [ "$PROJECT_NAME" == "null" ]; then
+    echo "❌ Could not extract project name from YAML content"
+    echo "Debug: First few lines of YAML:"
+    echo "$YAML_CONTENT" | head -n 10
+    exit 1
+fi
+
+echo "Project name extracted: $PROJECT_NAME"
+
+echo "Fetching environment variables from API..."
+if ! /var/www/get_service_envs.sh; then
+    echo "⚠️  Warning: Failed to fetch environment variables from API"
+    echo "   Continuing with initialization, but service IDs may be missing"
+fi
+
+ZAIA_FILE_PATH="/var/www/.zaia"
 
 cat > "$ZAIA_FILE_PATH" << ZAIA_EOF
 {
@@ -58,12 +67,37 @@ cat > "$ZAIA_FILE_PATH" << ZAIA_EOF
 }
 ZAIA_EOF
 
-echo "State initialized with project name: $PROJECT_NAME. Discovering services..."
-# Ensure discover_services.sh is executable and uses the correct path
+echo "State initialized with project name: $PROJECT_NAME"
+
+echo "Discovering services..."
 if [ -x "/var/www/discover_services.sh" ]; then
     /var/www/discover_services.sh
 else
     echo "❌ /var/www/discover_services.sh not found or not executable."
     exit 1
 fi
-echo "✅ Project state ready"
+
+echo ""
+echo "✅ PROJECT STATE READY"
+echo "==================="
+TOTAL_SERVICES=$(jq '.services | length' "$ZAIA_FILE_PATH" 2>/dev/null || echo "0")
+echo "Project: $PROJECT_NAME ($projectId)"
+echo "Services discovered: $TOTAL_SERVICES"
+
+if [ "$TOTAL_SERVICES" -gt 0 ]; then
+    echo ""
+    echo "Service breakdown:"
+    jq -r '.services | to_entries[] | "  \(.key) (\(.value.type)) - \(.value.role)"' "$ZAIA_FILE_PATH" 2>/dev/null || echo "  Error reading service details"
+fi
+
+MISSING_IDS=$(jq -r '.services | to_entries[] | select(.value.id == "ID_NOT_FOUND") | .key' "$ZAIA_FILE_PATH" 2>/dev/null | wc -l)
+if [ "$MISSING_IDS" -gt 0 ]; then
+    echo ""
+    echo "⚠️  Note: $MISSING_IDS service(s) have missing IDs"
+    echo "   This is normal for newly created services before agent restart"
+    echo "   Use /var/www/get_service_envs.sh to refresh API data"
+fi
+
+echo ""
+echo "State file location: $ZAIA_FILE_PATH"
+echo "Use /var/www/show_project_context.sh to view detailed project information"
