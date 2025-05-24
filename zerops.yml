@@ -6,7 +6,7 @@ zerops:
       prepareCommands:
         - curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash
         - sudo apt-get update -y
-        - sudo apt-get install -y chromium-browser
+        - sudo apt-get install -y chromium-browser jq yq
         - sudo npm install -g puppeteer
         - sudo apt-get clean -y
         - sudo rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
