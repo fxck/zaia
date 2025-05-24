@@ -12,8 +12,8 @@ zerops:
         - sudo apt-get install -y software-properties-common wget gnupg ca-certificates jq
 
         - echo "=== Enabling universe and multiverse repositories ==="
-        - sudo add-apt-repository universe || echo "Warning: add-apt-repository universe failed or already enabled."
-        - sudo add-apt-repository multiverse || echo "Warning: add-apt-repository multiverse failed or already enabled."
+        - 'sudo add-apt-repository universe || echo "Warning: add-apt-repository universe failed or already enabled."'
+        - 'sudo add-apt-repository multiverse || echo "Warning: add-apt-repository multiverse failed or already enabled."'
         - sudo apt-get update -y # Update again after new repos might have been added
 
         - echo "=== Adding Google Chrome repository ==="
@@ -26,42 +26,15 @@ zerops:
         - echo "=== Installing google-chrome-stable ==="
         - sudo apt-get install -y google-chrome-stable
 
-        - echo "=== Installing core Puppeteer dependencies - Batch 1 (Focus on previously failed) ==="
+        - echo "=== Installing core Puppeteer dependencies ==="
         - sudo apt-get install -y \
-            libnss3 \
-            libnspr4 \
-            libatk1.0-0 \
-            libatk-bridge2.0-0 \
-            libcups2 \
-            libdbus-1-3 \
-            libfontconfig1 \
-            libgbm1 \
-            libasound2 \
-            libpango-1.0-0 \
-            libpangocairo-1.0-0 \
-            libx11-6 \
-            libxfixes3 \
-            libxrandr2 \
-            fonts-liberation # Try this name first, if fails, might be fonts-liberation2
-            # libexpat1 was also on the list, can add if needed
-
-        - echo "=== Installing core Puppeteer dependencies - Batch 2 (More X11 and related) ==="
-        - sudo apt-get install -y \
-            libx11-xcb1 \
-            libxcb1 \
-            libxcomposite1 \
-            libxcursor1 \
-            libxdamage1 \
-            libxext6 \
-            libxinerama1 \
-            libxrender1 \
-            libxshmfence1 \
-            libxss1 \
-            libxtst6 \
-            lsb-release \
-            xdg-utils
-            # libdrm2 was also on the list, can add if needed
-            # libgtk-3-0 was also on the list, can add if needed
+            libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+            libdbus-1-3 libexpat1 libfontconfig1 libgbm1 libasound2 \
+            libpango-1.0-0 libpangocairo-1.0-0 libx11-6 libxfixes3 \
+            libxrandr2 fonts-liberation libx11-xcb1 libxcb1 \
+            libxcomposite1 libxcursor1 libxdamage1 libxext6 \
+            libxinerama1 libxrender1 libxshmfence1 libxss1 \
+            libxtst6 lsb-release xdg-utils
 
         - echo "=== Installing yq ==="
         - sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq && sudo chmod +x /usr/bin/yq
@@ -73,7 +46,7 @@ zerops:
         - sudo apt-get clean -y
         - sudo rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-        # Goose and SSH config (as before)
+        # Goose and SSH config
         - mkdir -p ~/.config/goose
         - mkdir -p ~/.ssh
         - |
@@ -105,7 +78,7 @@ zerops:
         GOOSE_TEMPERATURE: 0.3
         GOOSE_DISABLE_KEYRING: true
         CONFIGURE: false
-        PUPPETEER_EXECUTABLE_PATH: "/usr/bin/google-chrome-stable" # Path for Google Chrome
+        PUPPETEER_EXECUTABLE_PATH: "/usr/bin/google-chrome-stable"
         PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
         NODE_PATH: "/usr/lib/node_modules"
       start: zsc noop --silent
