@@ -1,0 +1,12 @@
+project:
+  name: zerops-agent
+  sshIsolation: project
+  envIsolation: none
+services:
+  - hostname: zaia
+    type: nodejs@22
+    buildFromGit: https://github.com/fxck/zaia
+    envSecrets:
+      ANTHROPIC_API_KEY: your-api-key-here
+      ANTHROPIC_HOST: https://api.anthropic.com
+
