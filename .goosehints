@@ -107,6 +107,26 @@ validate_service_name() {
 validate_service_name "$SERVICE" || exit 1
 ```
 
+### **Technology Validation Protocol**
+```bash
+# MANDATORY: Validate technology strings against /var/www/technologies.json
+# Assumes /var/www/technologies.json is always present and populated.
+is_technology_valid() {
+    local tech_to_check="$1"
+    if jq -e --arg t "$tech_to_check" '.[] | select(. == $t)' /var/www/technologies.json > /dev/null; then
+        return 0 # Technology is valid
+    else
+        echo "❌ Invalid or unsupported technology: '$tech_to_check'."
+        echo "Ensure the technology is listed in /var/www/technologies.json. Some examples:"
+        jq '.[]' /var/www/technologies.json | head -n 10
+        return 1 # Technology is not in the list
+    fi
+}
+
+# ALWAYS validate technology before use:
+# Example: is_technology_valid "$TECH_VARIABLE" || exit 1
+```
+
 ### **Service ID Discovery Protocol**
 ```bash
 # Preferred: Use environment variables (instant, no API calls)
@@ -410,9 +430,19 @@ kill $LOG_PID
 ### **Workflow A: Greenfield Service Creation**
 
 ```bash
-# 1. Determine technology
-TECH="nodejs"  # or python, php, go, java, dotnet, rust, etc.
-echo "Creating services with $TECH"
+# 1. Determine technology (e.g. from user input or agent's decision)
+DESIRED_TECH="nodejs@22"
+echo "Attempting to create services with $DESIRED_TECH"
+
+# 1b. Validate the chosen technology (function defined in LEVEL 1 SAFETY PROTOCOLS)
+# Assumes is_technology_valid function is sourced or defined in the execution scope.
+# If not, the function definition should be included here or sourced.
+if ! is_technology_valid "$DESIRED_TECH"; then
+    echo "Technology validation failed. Aborting service creation."
+    exit 1 # Or handle error appropriately
+fi
+TECH="$DESIRED_TECH" # Use the validated technology
+echo "Creating services with validated technology: $TECH"
 
 # 2. Get recipe with proper Zerops format
 RECIPE=$(/var/www/get_recipe.sh $TECH)
@@ -716,7 +746,7 @@ zcli service delete <serviceId>
 
 # Database Services (use for non-runtime services only)
 zcli service create postgresql@16 db --mode NON_HA --projectId <projectId>
-zcli service create valkey@7.2@7 cache --mode NON_HA --projectId <projectId>
+zcli service create valkey@7.2 cache --mode NON_HA --projectId <projectId>
 ```
 
 ### 🛠️ Helper Scripts
@@ -833,7 +863,7 @@ ssh dev "tail -f /var/www/dev.log /var/www/error.log"
 
 # Watch for specific patterns
 ssh dev "tail -f /var/www/dev.log | grep --line-buffered 'user'"
-
+```
 
 ---
 
