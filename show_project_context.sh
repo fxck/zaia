@@ -64,7 +64,7 @@ if [ "$(jq '.envs | length' /var/www/.zaia)" -gt 0 ]; then
             grep "_zeropsSubdomain=" /tmp/current_envs.env | while IFS= read -r line; do
                 SERVICE_NAME=$(echo "$line" | cut -d_ -f1)
                 SUBDOMAIN=$(echo "$line" | cut -d= -f2)
-                echo "  $SERVICE_NAME: https://$SUBDOMAIN"
+                echo "  $SERVICE_NAME: $SUBDOMAIN"
             done
         fi
     else

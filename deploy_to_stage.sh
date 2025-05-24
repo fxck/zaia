@@ -167,6 +167,7 @@ GIT_STATUS=$(ssh "$DEV_SERVICE" "cd /var/www && if [ -d .git ]; then echo 'exist
 
 if [ "$GIT_STATUS" = "missing" ]; then
     echo "Initializing git repository..."
+    ssh "$DEV_SERVICE" "git config --global --add safe.directory /var/www"
     ssh "$DEV_SERVICE" "cd /var/www && git init && git add . && git commit -m 'Initial deployment commit'"
     echo "✅ Git repository initialized"
 else
@@ -174,6 +175,7 @@ else
     UNCOMMITTED=$(ssh "$DEV_SERVICE" "cd /var/www && git status --porcelain | wc -l")
     if [ "$UNCOMMITTED" -gt 0 ]; then
         echo "Committing changes..."
+        ssh "$DEV_SERVICE" "git config --global --add safe.directory /var/www"
         ssh "$DEV_SERVICE" "cd /var/www && git add . && git commit -m 'Deployment commit $(date)'"
         echo "✅ Changes committed"
     else
