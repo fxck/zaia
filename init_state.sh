@@ -27,15 +27,25 @@ if ! curl -s -H "Authorization: Bearer $ZEROPS_ACCESS_TOKEN" \
 fi
 
 # Validate export
-if ! yq e '.project.name' /tmp/project_export.yaml >/dev/null 2>&1; then
-    echo "❌ Invalid export data"
+# First check if the 'yaml' key exists and its content has a project name
+if ! jq -e '.yaml' /tmp/project_export.yaml >/dev/null 2>&1 || \
+   ! (jq -r '.yaml' /tmp/project_export.yaml | yq e '.project.name' - >/dev/null 2>&1); then
+    echo "❌ Invalid export data or missing project name in YAML content."
+    echo "Debug: Content of /tmp/project_export.yaml:"
+    cat /tmp/project_export.yaml | head -n 10 # Show first few lines for debugging
     exit 1
 fi
 
-PROJECT_NAME=$(yq e '.project.name' /tmp/project_export.yaml)
+# Corrected line to extract project name
+PROJECT_NAME=$(jq -r '.yaml' /tmp/project_export.yaml | yq e '.project.name' -)
 
 # Initialize .zaia
-cat > ./.zaia << ZAIA_EOF
+# Ensure the directory for .zaia exists and is writable if not in /var/www
+# For this script, it's creating ./.zaia, so it depends on where the script is run from.
+# If you intend it to always be /var/www/.zaia, change the path:
+ZAIA_FILE_PATH="/var/www/.zaia" # Define path for clarity
+
+cat > "$ZAIA_FILE_PATH" << ZAIA_EOF
 {
   "project": {
     "id": "$projectId",
@@ -48,6 +58,12 @@ cat > ./.zaia << ZAIA_EOF
 }
 ZAIA_EOF
 
-echo "State initialized, discovering services..."
-/var/www/discover_services.sh
+echo "State initialized with project name: $PROJECT_NAME. Discovering services..."
+# Ensure discover_services.sh is executable and uses the correct path
+if [ -x "/var/www/discover_services.sh" ]; then
+    /var/www/discover_services.sh
+else
+    echo "❌ /var/www/discover_services.sh not found or not executable."
+    exit 1
+fi
 echo "✅ Project state ready"
