@@ -1,88 +1,93 @@
 #!/bin/bash
 set -e
 
-echo "=== FETCHING ENVIRONMENT VARIABLES VIA API ==="
+echo "=== ENVIRONMENT VARIABLE MANAGEMENT (.zaia ONLY) ==="
 
-if [ -z "$ZEROPS_ACCESS_TOKEN" ]; then
-    echo "❌ ZEROPS_ACCESS_TOKEN not available"
+# Check if .zaia exists
+if [ ! -f /var/www/.zaia ]; then
+    echo "❌ FATAL: .zaia file not found"
+    echo "   Run /var/www/init_state.sh first to initialize project state"
     exit 1
 fi
 
-if [ -z "$projectId" ]; then
-    echo "❌ projectId not available"
+if ! jq empty /var/www/.zaia 2>/dev/null; then
+    echo "❌ FATAL: .zaia file is corrupted"
+    echo "   Run /var/www/init_state.sh to reinitialize"
     exit 1
 fi
 
-API_URL="https://api.app-prg1.zerops.io/api/rest/public/project/$projectId/env-file-download"
-CACHE_FILE="/tmp/current_envs.env"
-CACHE_AGE_LIMIT=300  # 5 minutes
+echo "ℹ️  This script uses the unified .zaia system as the ONLY source of truth"
+echo "   All environment variables are managed through .zaia - NO FALLBACKS"
+echo ""
 
-# Check if cache exists and is still valid
-if [ -f "$CACHE_FILE" ]; then
-    CACHE_AGE=$(($(date +%s) - $(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo "0")))
-    if [ $CACHE_AGE -lt $CACHE_AGE_LIMIT ]; then
-        echo "✅ Using cached environment variables (age: ${CACHE_AGE}s)"
-
-        TOTAL_VARS=$(wc -l < "$CACHE_FILE")
-        SERVICE_IDS=$(grep "_serviceId=" "$CACHE_FILE" | wc -l)
-        SUBDOMAINS=$(grep "_zeropsSubdomain=" "$CACHE_FILE" | wc -l)
-
-        echo "📊 Summary (cached):"
-        echo "  Total variables: $TOTAL_VARS"
-        echo "  Service IDs: $SERVICE_IDS"
-        echo "  Subdomains: $SUBDOMAINS"
-
-        if [ $SERVICE_IDS -gt 0 ]; then
-            echo ""
-            echo "🔧 Available Service IDs:"
-            grep "_serviceId=" "$CACHE_FILE" | sort
-        fi
-
-        if [ $SUBDOMAINS -gt 0 ]; then
-            echo ""
-            echo "🌐 Available Subdomains:"
-            grep "_zeropsSubdomain=" "$CACHE_FILE" | sort
-        fi
-
-        echo ""
-        echo "Environment variables loaded from cache: $CACHE_FILE"
-        exit 0
-    else
-        echo "Cache expired (age: ${CACHE_AGE}s), refreshing from API..."
-    fi
-else
-    echo "No cache found, fetching from API..."
+# Always sync environment data to .zaia (this is now the core functionality)
+echo "🔄 Syncing environment variables to .zaia..."
+if ! /var/www/sync_env_to_zaia.sh; then
+    echo "❌ FATAL: Failed to sync environment variables to .zaia"
+    exit 1
 fi
 
-echo "Fetching environment variables from API..."
-if curl -s -H "Authorization: Bearer $ZEROPS_ACCESS_TOKEN" "$API_URL" -o "$CACHE_FILE"; then
-    echo "✅ Environment variables fetched successfully"
+echo ""
+echo "📊 ENVIRONMENT VARIABLE SUMMARY (.zaia ONLY):"
 
-    TOTAL_VARS=$(wc -l < "$CACHE_FILE")
-    SERVICE_IDS=$(grep "_serviceId=" "$CACHE_FILE" | wc -l)
-    SUBDOMAINS=$(grep "_zeropsSubdomain=" "$CACHE_FILE" | wc -l)
+# Show summary from .zaia
+TOTAL_SERVICES=$(jq '.services | length' /var/www/.zaia)
+SERVICES_WITH_PROVIDED_ENVS=$(jq -r '.services | to_entries[] | select(.value.serviceProvidedEnvs | length > 0) | .key' /var/www/.zaia | wc -l)
+SERVICES_WITH_SELF_DEFINED=$(jq -r '.services | to_entries[] | select(.value.selfDefinedEnvs | length > 0) | .key' /var/www/.zaia | wc -l)
 
-    echo "📊 Summary:"
-    echo "  Total variables: $TOTAL_VARS"
-    echo "  Service IDs: $SERVICE_IDS"
-    echo "  Subdomains: $SUBDOMAINS"
+echo "  Total Services: $TOTAL_SERVICES"
+echo "  With Service-Provided Env Vars: $SERVICES_WITH_PROVIDED_ENVS"
+echo "  With Self-Defined Env Vars: $SERVICES_WITH_SELF_DEFINED"
 
-    if [ $SERVICE_IDS -gt 0 ]; then
-        echo ""
-        echo "🔧 Available Service IDs:"
-        grep "_serviceId=" "$CACHE_FILE" | sort
-    fi
-
-    if [ $SUBDOMAINS -gt 0 ]; then
-        echo ""
-        echo "🌐 Available Subdomains:"
-        grep "_zeropsSubdomain=" "$CACHE_FILE" | sort
-    fi
-
+if [ "$SERVICES_WITH_PROVIDED_ENVS" -gt 0 ]; then
     echo ""
-    echo "Environment variables cached to: $CACHE_FILE"
+    echo "🔗 SERVICES WITH AVAILABLE ENVIRONMENT VARIABLES:"
+    jq -r '.services | to_entries[] | select(.value.serviceProvidedEnvs | length > 0) | "  \(.key): \(.value.serviceProvidedEnvs | length) variables"' /var/www/.zaia
+fi
 
-else
-    echo "❌ Failed to fetch environment variables from API"
-    exit 1
+# Show service IDs and subdomains if available
+SERVICES_WITH_IDS=$(jq -r '.services | to_entries[] | select(.value.id != "ID_NOT_FOUND" and .value.id != "" and .value.id != null) | .key' /var/www/.zaia | wc -l)
+if [ "$SERVICES_WITH_IDS" -gt 0 ]; then
+    echo ""
+    echo "🆔 SERVICE IDs (.zaia):"
+    jq -r '.services | to_entries[] | select(.value.id != "ID_NOT_FOUND" and .value.id != "" and .value.id != null) | "  \(.key): \(.value.id)"' /var/www/.zaia
+fi
+
+SERVICES_WITH_SUBDOMAINS=$(jq -r '.services | to_entries[] | select(.value.subdomain != null and .value.subdomain != "") | .key' /var/www/.zaia | wc -l)
+if [ "$SERVICES_WITH_SUBDOMAINS" -gt 0 ]; then
+    echo ""
+    echo "🌐 AVAILABLE SUBDOMAINS (.zaia):"
+    jq -r '.services | to_entries[] | select(.value.subdomain != null and .value.subdomain != "") | "  \(.key): https://\(.value.subdomain)"' /var/www/.zaia
+fi
+
+echo ""
+echo "💡 ENVIRONMENT VARIABLE FUNCTIONS (.zaia ONLY):"
+echo "  View env vars for a service:     get_available_envs <service_name>"
+echo "  Get environment suggestions:     suggest_env_vars <service_name>"
+echo "  Test database connectivity:      test_database_connectivity <service> <db_service>"
+echo "  Check restart requirements:      needs_environment_restart <service> <other_service>"
+echo "  Get service ID:                  get_service_id <service_name>"
+echo "  Get subdomain:                   get_service_subdomain <service_name>"
+
+echo ""
+echo "🔄 STATE MANAGEMENT:"
+echo "  Sync environment data:           /var/www/sync_env_to_zaia.sh"
+echo "  Update service discovery:        /var/www/discover_services.sh"
+echo "  Show project context:            /var/www/show_project_context.sh"
+
+echo ""
+echo "✅ Environment variable data is available in .zaia (ONLY source of truth)"
+
+# Show freshness warning if data is old
+LAST_SYNC=$(jq -r '.project.lastSync // "never"' /var/www/.zaia)
+if [ "$LAST_SYNC" != "never" ]; then
+    SYNC_TIMESTAMP=$(date -d "$LAST_SYNC" +%s 2>/dev/null || echo "0")
+    CURRENT_TIMESTAMP=$(date +%s)
+    AGE_SECONDS=$((CURRENT_TIMESTAMP - SYNC_TIMESTAMP))
+
+    if [ "$AGE_SECONDS" -gt 3600 ]; then  # 1 hour
+        echo ""
+        echo "⚠️  WARNING: Environment data is older than 1 hour"
+        echo "   Consider running: /var/www/sync_env_to_zaia.sh"
+    fi
 fi

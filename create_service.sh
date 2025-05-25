@@ -43,7 +43,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         *)
-            echo "Unknown option: $1"
+            echo "❌ Unknown option: $1"
             usage
             ;;
     esac
@@ -52,6 +52,9 @@ done
 if ! validate_service_name "$HOSTNAME"; then
     exit 1
 fi
+
+# CLEAN: Validate service type (required - will exit if invalid)
+validate_service_type "$TYPE"
 
 if [ "$MODE" != "HA" ] && [ "$MODE" != "NON_HA" ]; then
     echo "❌ Invalid mode: $MODE. Must be HA or NON_HA"
@@ -76,8 +79,9 @@ EOF
         rm -f /tmp/runtime_import_${hostname}.yaml
         return 0
     else
-        echo "❌ Failed to create runtime service $hostname"
-        return 1
+        echo "❌ FATAL: Failed to create runtime service $hostname"
+        rm -f /tmp/runtime_import_${hostname}.yaml
+        exit 1
     fi
 }
 
@@ -100,8 +104,9 @@ EOF
         rm -f /tmp/managed_import_${hostname}.yaml
         return 0
     else
-        echo "❌ Failed to create managed service $hostname"
-        return 1
+        echo "❌ FATAL: Failed to create managed service $hostname"
+        rm -f /tmp/managed_import_${hostname}.yaml
+        exit 1
     fi
 }
 
@@ -111,47 +116,32 @@ echo "Type: $TYPE"
 echo "Dual: $CREATE_DUAL"
 echo ""
 
-SUCCESS=true
-
 if [ "$CREATE_DUAL" = true ]; then
     if is_managed_service "$TYPE"; then
-        echo "❌ Cannot create dual services for managed services"
+        echo "❌ FATAL: Cannot create dual services for managed services"
         exit 1
     fi
 
     echo "Creating dual services (dev + stage)..."
-
-    if ! create_runtime_service "$HOSTNAME" "$TYPE"; then
-        SUCCESS=false
-    fi
-
-    if ! create_runtime_service "${HOSTNAME}dev" "$TYPE"; then
-        SUCCESS=false
-    fi
+    create_runtime_service "$HOSTNAME" "$TYPE"
+    create_runtime_service "${HOSTNAME}dev" "$TYPE"
 
 elif is_managed_service "$TYPE"; then
-    if ! create_managed_service "$HOSTNAME" "$TYPE" "$MODE"; then
-        SUCCESS=false
-    fi
-
+    create_managed_service "$HOSTNAME" "$TYPE" "$MODE"
 else
-    if ! create_runtime_service "$HOSTNAME" "$TYPE"; then
-        SUCCESS=false
-    fi
+    create_runtime_service "$HOSTNAME" "$TYPE"
 fi
 
-if [ "$SUCCESS" = true ]; then
-    echo ""
-    echo "✅ Service creation completed successfully"
-    echo ""
-    echo "Next steps:"
-    echo "1. Wait 10-30 seconds for service initialization"
-    echo "2. Run: /var/www/get_service_envs.sh"
-    echo "3. Run: /var/www/discover_services.sh"
-    echo "4. Check status: /var/www/show_project_context.sh"
+echo ""
+echo "✅ Service creation completed successfully"
+echo ""
+echo "🔄 MANDATORY NEXT STEPS (.zaia ONLY):"
+echo "1. Wait 10-30 seconds for service initialization"
+echo "2. Sync to .zaia: /var/www/sync_env_to_zaia.sh"
+echo "3. Update discovery: /var/www/discover_services.sh"
+echo "4. Check status: /var/www/show_project_context.sh"
+echo "5. View env vars: get_available_envs <service_name>"
+echo "6. Get suggestions: suggest_env_vars <service_name>"
 
-else
-    echo ""
-    echo "❌ Service creation failed"
-    exit 1
-fi
+echo ""
+echo "💡 Remember: All environment data is managed through .zaia ONLY"
