@@ -133,43 +133,6 @@ else
 fi
 
 echo ""
-echo "7️⃣ CREATING MISSING OPTIONAL FILES"
-echo "================================="
-
-# Create recipes.json if missing
-if [ ! -f "/var/www/recipes.json" ]; then
-    echo "📝 Creating default recipes.json..."
-    cat > /var/www/recipes.json << 'EOF'
-[
-  {
-    "id": "nodejs",
-    "title": "Node.js Application",
-    "tag": "Node.js",
-    "slug": "nodejs",
-    "desc": "Node.js runtime for JavaScript/TypeScript applications",
-    "keywords": ["node", "javascript", "typescript", "express", "fastify"],
-    "category": "backend",
-    "importYaml": "services:\n  - hostname: apidev\n    type: nodejs@22\n    startWithoutCode: true\n    priority: 50\n    envSecrets:\n      JWT_SECRET: <@generateRandomString(<32>)>\n      NODE_ENV: development\n  - hostname: api\n    type: nodejs@22\n    startWithoutCode: true\n    priority: 40\n    envSecrets:\n      JWT_SECRET: <@generateRandomString(<32>)>\n      NODE_ENV: production",
-    "zeropsYmlContent": "zerops:\n  - setup: apidev\n    build:\n      base: nodejs@22\n      buildCommands:\n        - npm ci --include=dev\n      cache:\n        - node_modules\n        - .npm\n    run:\n      base: nodejs@22\n      ports:\n        - port: 3000\n          httpSupport: true\n      envVariables:\n        PORT: 3000\n      start: npm start"
-  },
-  {
-    "id": "nodejs-typescript",
-    "title": "Node.js TypeScript Application",
-    "tag": "TypeScript",
-    "slug": "typescript",
-    "desc": "Node.js with TypeScript for type-safe development",
-    "keywords": ["typescript", "ts", "node", "type-safe"],
-    "category": "backend",
-    "importYaml": "services:\n  - hostname: db\n    type: postgresql@16\n    mode: NON_HA\n    priority: 100\n  - hostname: apidev\n    type: nodejs@22\n    startWithoutCode: true\n    priority: 50\n    envSecrets:\n      JWT_SECRET: <@generateRandomString(<32>)>\n      DATABASE_URL: ${db_connectionString}\n  - hostname: api\n    type: nodejs@22\n    startWithoutCode: true\n    priority: 40\n    envSecrets:\n      JWT_SECRET: <@generateRandomString(<32>)>\n      DATABASE_URL: ${db_connectionString}",
-    "zeropsYmlContent": "zerops:\n  - setup: apidev\n    build:\n      base: nodejs@22\n      buildCommands:\n        - npm ci --include=dev\n        - npm run build\n      cache:\n        - node_modules\n        - .npm\n        - .tsbuildinfo\n    run:\n      base: nodejs@22\n      ports:\n        - port: 3000\n          httpSupport: true\n      envVariables:\n        PORT: 3000\n        NODE_ENV: development\n      start: npm run dev\n  - setup: api\n    build:\n      base: nodejs@22\n      buildCommands:\n        - npm ci --production=false\n        - npm run build\n        - npm prune --production\n      deployFiles:\n        - dist\n        - package.json\n        - package-lock.json\n        - node_modules\n    run:\n      base: nodejs@22\n      ports:\n        - port: 3000\n          httpSupport: true\n      envVariables:\n        PORT: 3000\n        NODE_ENV: production\n      start: node dist/index.js\n      healthCheck:\n        httpGet:\n          port: 3000\n          path: /health"
-  }
-]
-EOF
-    echo "✅ Created default recipes.json"
-    chmod 644 /var/www/recipes.json 2>/dev/null || true
-fi
-
-echo ""
 echo "═══════════════════════════════════════════════════════════"
 echo "                        SUMMARY                              "
 echo "═══════════════════════════════════════════════════════════"
