@@ -6,13 +6,30 @@
 
 Execute IN ORDER before ANY action:
 ```bash
+# 1. Run preflight check to ensure all components are ready
+/var/www/preflight_check.sh
+
+# 2. Source core utilities
 source /var/www/core_utils.sh
+
+# 3. Show current project context
 /var/www/show_project_context.sh
+
+# 4. Initialize project if needed
 [ ! -f /var/www/.zaia ] || ! jq empty /var/www/.zaia 2>/dev/null && /var/www/init_project.sh
+
+# 5. Sync environment variables
 sync_env_to_zaia  # Function from core_utils.sh
 ```
 
 **FORBIDDEN**: Do NOT explore filesystem, check pwd, or perform ANY other actions before completing this sequence.
+
+**NOTE**: The preflight check will:
+- Verify all required scripts and files exist
+- Check for proper permissions
+- Create missing optional files (like recipes.json) with defaults
+- Validate authentication and environment variables
+- Provide clear status report with actionable fixes
 
 ## 🧠 STATE MANAGEMENT (.zaia)
 

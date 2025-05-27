@@ -720,6 +720,13 @@ create_safe_yaml() {
     # Success - move to output file
     mv "$temp_file" "$output_file"
     echo "✅ Valid YAML created: $output_file"
+
+    # Show summary of what was created
+    echo "📋 Services to be created:"
+    yq e '.services[] | "  - \(.hostname) (\(.type))"' "$output_file"
+    echo ""
+    echo "💾 File size: $(stat -c%s "$output_file" 2>/dev/null || stat -f%z "$output_file" 2>/dev/null || echo "unknown") bytes"
+
     return 0
 }
 

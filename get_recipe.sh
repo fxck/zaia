@@ -28,10 +28,88 @@ SEARCH_TERM="$1"
 # Check recipes.json exists
 if [ ! -f /var/www/recipes.json ]; then
     echo "❌ recipes.json not found"
-    echo "   This file contains framework templates and best practices"
+    echo ""
+    echo "📋 Creating basic Node.js TypeScript configuration..."
+
+    # Provide a fallback template for Node.js TypeScript
+    if [[ "$SEARCH_TERM" =~ ^(node|nodejs|typescript|ts)$ ]]; then
+        cat << 'EOF'
+╔══════════════════════════════════════════════════════════╗
+║ ✅ Fallback Recipe: Node.js TypeScript                    ║
+╚══════════════════════════════════════════════════════════╝
+
+📦 SERVICE ARCHITECTURE (Import YAML)
+====================================
+
+services:
+  - hostname: db
+    type: postgresql@16
+    mode: NON_HA
+    priority: 100
+  - hostname: apidev
+    type: nodejs@22
+    startWithoutCode: true
+    priority: 50
+    envSecrets:
+      JWT_SECRET: <@generateRandomString(<32>)>
+      DATABASE_URL: ${db_connectionString}
+  - hostname: api
+    type: nodejs@22
+    startWithoutCode: true
+    priority: 40
+    envSecrets:
+      JWT_SECRET: <@generateRandomString(<32>)>
+      DATABASE_URL: ${db_connectionString}
+
+🚀 DEPLOYMENT CONFIGURATION (zerops.yml)
+=======================================
+
+zerops:
+  - setup: apidev
+    build:
+      base: nodejs@22
+      buildCommands:
+        - npm ci
+        - npm run build
+    run:
+      base: nodejs@22
+      ports:
+        - port: 3000
+          httpSupport: true
+      envVariables:
+        PORT: 3000
+        NODE_ENV: development
+      start: npm run dev
+  - setup: api
+    build:
+      base: nodejs@22
+      buildCommands:
+        - npm ci --production=false
+        - npm run build
+        - npm prune --production
+    run:
+      base: nodejs@22
+      ports:
+        - port: 3000
+          httpSupport: true
+      envVariables:
+        PORT: 3000
+        NODE_ENV: production
+      start: node dist/index.js
+
+💡 Save the above configurations to files and import them.
+EOF
+        exit 0
+    fi
+
+    echo "   No recipes available for '$SEARCH_TERM'"
+    echo ""
+    echo "💡 You can still create services manually:"
+    echo "   /var/www/create_services.sh <hostname> <type>"
     exit 1
 fi
 
+# Rest of the original script continues...
 # Enhanced fuzzy matching for common variations
 fuzzy_match() {
     local input="$1"
@@ -57,6 +135,7 @@ fuzzy_match() {
         express*) echo "express" ;;
         fastify*) echo "fastify" ;;
         koa*) echo "koa" ;;
+        node*|typescript*|ts) echo "nodejs-typescript" ;;
 
         # Python
         django*) echo "django" ;;
