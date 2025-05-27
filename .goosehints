@@ -388,7 +388,7 @@ create_safe_yaml /tmp/services.yaml << 'EOF'
 services:
   - hostname: myapp
     type: nodejs@22
-    startWithoutCode: true
+    startWithoutCode: true # only for dev services
 EOF
 
 # ❌ DANGEROUS:
@@ -521,9 +521,9 @@ services:
     priority: 50
     envSecrets:
       JWT_SECRET: <@generateRandomString(<32>)>
+  # no need for startWithoutCode for stage services
   - hostname: api
     type: nodejs@22
-    startWithoutCode: true
     priority: 40
 EOF
 
