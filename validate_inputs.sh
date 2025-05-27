@@ -40,7 +40,7 @@ apply_startwithoutcode_workaround() {
     echo "🔧 Applying Zerops startWithoutCode bug workaround for $service_name..."
 
     while [ $retry_count -lt $max_retries ]; do
-        if ssh -o ConnectTimeout=15 "zerops@$service_name" "zsc setSecretEnv foo bar" 2>/dev/null; then
+        if timeout 15 ssh -o ConnectTimeout=15 "zerops@$service_name" "zsc setSecretEnv foo bar" 2>/dev/null; then
             echo "✅ Bug workaround applied successfully for $service_name"
             return 0
         else
@@ -51,8 +51,60 @@ apply_startwithoutcode_workaround() {
     done
 
     echo "❌ WARNING: Failed to apply bug workaround for $service_name after $max_retries attempts"
-    echo "   Run manually: ssh zerops@$service_name 'zsc setSecretEnv foo bar'"
+    echo "   Run manually: timeout 15 ssh zerops@$service_name 'zsc setSecretEnv foo bar'"
     return 1
+}
+
+# CLEAN: Universal application health monitoring
+check_application_health() {
+    local service="$1"
+    local port="${2:-3000}"
+    local process_pattern="${3:-dev}"
+
+    echo "=== APPLICATION HEALTH CHECK ==="
+
+    # 1. Process Status
+    if ssh zerops@$service "pgrep -f '$process_pattern'" >/dev/null; then
+        echo "✅ Process running"
+        local pids=$(ssh zerops@$service "pgrep -f '$process_pattern' | tr '\n' ' '")
+        echo "   PIDs: $pids"
+    else
+        echo "❌ Process not running"
+        return 1
+    fi
+
+    # 2. Port Status
+    if ssh zerops@$service "netstat -tln | grep :$port" >/dev/null; then
+        echo "✅ Port $port listening"
+    else
+        echo "❌ Port $port not listening"
+    fi
+
+    # 3. Log Analysis (last 20 lines)
+    echo ""
+    echo "📋 Recent logs:"
+    local logs=$(ssh zerops@$service "tail -20 /var/www/app.log 2>/dev/null || echo 'No logs found'")
+    echo "$logs"
+
+    # 4. Error Detection
+    if echo "$logs" | grep -i "error\|exception\|failed\|crash" >/dev/null; then
+        echo ""
+        echo "⚠️  ERRORS DETECTED in logs"
+        echo "$logs" | grep -i "error\|exception\|failed\|crash"
+    fi
+
+    # 5. Endpoint Test (if port is standard HTTP port)
+    if [[ "$port" =~ ^(80|443|3000|8000|8080|5000)$ ]]; then
+        echo ""
+        echo "🔗 Testing HTTP endpoint..."
+        if curl -sf "http://$service:$port/health" >/dev/null 2>&1; then
+            echo "✅ Health endpoint responding"
+        elif curl -sf "http://$service:$port/" >/dev/null 2>&1; then
+            echo "✅ Root endpoint responding"
+        else
+            echo "❌ HTTP endpoints not responding"
+        fi
+    fi
 }
 
 # CLEAN: Get service ID from .zaia ONLY - NO FALLBACKS

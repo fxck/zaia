@@ -103,7 +103,7 @@ echo "Force deploy: $FORCE_DEPLOY"
 echo ""
 
 echo "=== STEP 1: VERIFYING DEV SERVICE ACCESS ==="
-if ! ssh -o ConnectTimeout=10 "zerops@$DEV_SERVICE" "echo 'SSH OK'" 2>/dev/null; then
+if ! timeout 10 ssh -o ConnectTimeout=10 "zerops@$DEV_SERVICE" "echo 'SSH OK'" 2>/dev/null; then
     echo "❌ FATAL: Cannot SSH to $DEV_SERVICE"
     exit 1
 fi
@@ -249,6 +249,36 @@ if ! /var/www/discover_services.sh >/dev/null 2>&1; then
 fi
 
 echo ""
+echo "=== STEP 8: STAGE SERVICE HEALTH CHECK ==="
+echo "Waiting for stage service to be ready..."
+sleep 10
+
+# Determine port from service type or default
+STAGE_PORT="3000"
+SERVICE_TYPE=$(jq -r --arg svc "$STAGE_SERVICE" '.services[$svc].type // ""' /var/www/.zaia 2>/dev/null)
+if [[ "$SERVICE_TYPE" == python* ]]; then
+    STAGE_PORT="8000"
+elif [[ "$SERVICE_TYPE" == go* ]]; then
+    STAGE_PORT="8080"
+fi
+
+# Check stage service health (without SSH - deployment only policy)
+echo "Testing stage service endpoints..."
+if SUBDOMAIN=$(get_service_subdomain "$STAGE_SERVICE" 2>/dev/null); then
+    if curl -sf "https://$SUBDOMAIN/health" >/dev/null 2>&1; then
+        echo "✅ Stage service health endpoint responding"
+    elif curl -sf "https://$SUBDOMAIN/" >/dev/null 2>&1; then
+        echo "✅ Stage service root endpoint responding"
+    else
+        echo "⚠️  Stage service endpoints not responding yet"
+        echo "   This is normal for newly deployed services"
+        echo "   Check again in a few minutes"
+    fi
+else
+    echo "ℹ️  No subdomain available yet - skipping endpoint tests"
+fi
+
+echo ""
 echo "🎉 DEPLOYMENT COMPLETE!"
 echo "================================"
 echo "Development: $DEV_SERVICE"
@@ -266,6 +296,7 @@ echo "Next steps (.zaia ONLY):"
 echo "- Monitor logs: zcli service log --serviceId $STAGE_ID --follow"
 echo "- Check status: /var/www/show_project_context.sh"
 echo "- View env vars: get_available_envs $STAGE_SERVICE"
+echo "- Health check dev: check_application_health $DEV_SERVICE $STAGE_PORT"
 echo "- Continue development on $DEV_SERVICE and redeploy as needed"
 
 # Cleanup

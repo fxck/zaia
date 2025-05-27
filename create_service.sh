@@ -86,7 +86,7 @@ EOF
         local retry_count=0
 
         while [ $retry_count -lt $max_retries ]; do
-            if ssh -o ConnectTimeout=15 "zerops@$hostname" "zsc setSecretEnv foo bar" 2>/dev/null; then
+            if timeout 15 ssh -o ConnectTimeout=15 "zerops@$hostname" "zsc setSecretEnv foo bar" 2>/dev/null; then
                 echo "✅ Bug workaround applied successfully for $hostname"
                 break
             else
@@ -98,7 +98,7 @@ EOF
 
         if [ $retry_count -eq $max_retries ]; then
             echo "❌ WARNING: Failed to apply bug workaround for $hostname after $max_retries attempts"
-            echo "   Run manually: ssh zerops@$hostname 'zsc setSecretEnv foo bar'"
+            echo "   Run manually: timeout 15 ssh zerops@$hostname 'zsc setSecretEnv foo bar'"
         fi
 
         return 0
