@@ -35,6 +35,7 @@ zerops:
         - echo "=== Installing yq ==="
         - sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq && sudo chmod +x /usr/bin/yq
 
+        - sudo apt-get install fzf
         - echo "=== Installing Puppeteer globally ==="
         - sudo npm install -g puppeteer
 
