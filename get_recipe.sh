@@ -174,17 +174,16 @@ echo "🔍 Searching for '$SEARCH_TERM' (matched: '$MATCHED')..."
 
 # Search for recipe with multiple strategies
 RECIPE=$(jq -r --arg term "$MATCHED" --arg orig "$SEARCH_TERM" '
-    .[] | select(
-        .id == $term or
-        .id == $orig or
-        .slug == $term or
-        .slug == $orig or
-        (.tag | ascii_downcase) == $term or
-        (.tag | ascii_downcase) == $orig or
-        (.title | ascii_downcase | test($term)) or
-        (.title | ascii_downcase | test($orig)) or
-        (.keywords[]? | ascii_downcase | test($term))
-    ) | . // empty
+  .[] | select(
+      .id == $term or
+      .id == $orig or
+      .slug == $term or
+      .slug == $orig or
+      (.tag // "" | ascii_downcase) == $term or
+      (.tag // "" | ascii_downcase) == $orig or
+      (.title // "" | ascii_downcase | test($term)) or
+      (.title // "" | ascii_downcase | test($orig))
+  ) | . // empty
 ' /var/www/recipes.json | head -1)
 
 # If not found, try partial matching
