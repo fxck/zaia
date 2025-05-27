@@ -67,44 +67,47 @@ create_runtime_service() {
 
     echo "Creating runtime service: $hostname ($type)"
 
-    cat > /tmp/runtime_import_${hostname}.yaml << EOF
-services:
-  - hostname: $hostname
+    local yaml_file="/tmp/runtime_import_${hostname}.yaml"
+    local yaml_content="  - hostname: $hostname
     type: $type
-    startWithoutCode: true
-EOF
+    startWithoutCode: true"
 
-    if zcli project service-import /tmp/runtime_import_${hostname}.yaml --projectId "$projectId"; then
-        echo "✅ Runtime service $hostname created successfully"
-        rm -f /tmp/runtime_import_${hostname}.yaml
+    if create_service_batch_yaml "$yaml_file" "$yaml_content"; then
+        if zcli project service-import "$yaml_file" --projectId "$projectId"; then
+            echo "✅ Runtime service $hostname created successfully"
+            rm -f "$yaml_file"
 
-        # CRITICAL: Zerops bug workaround for startWithoutCode services
-        echo "🔧 Applying Zerops startWithoutCode bug workaround..."
-        sleep 10  # Wait for service to be fully ready
+            # CRITICAL: Zerops bug workaround for startWithoutCode services
+            echo "🔧 Applying Zerops startWithoutCode bug workaround..."
+            sleep 10  # Wait for service to be fully ready
 
-        local max_retries=5
-        local retry_count=0
+            local max_retries=5
+            local retry_count=0
 
-        while [ $retry_count -lt $max_retries ]; do
-            if timeout 15 ssh -o ConnectTimeout=15 "zerops@$hostname" "zsc setSecretEnv foo bar" 2>/dev/null; then
-                echo "✅ Bug workaround applied successfully for $hostname"
-                break
-            else
-                retry_count=$((retry_count + 1))
-                echo "⚠️  Retry $retry_count/$max_retries: Waiting for service $hostname to be ready..."
-                sleep 15
+            while [ $retry_count -lt $max_retries ]; do
+                if timeout 15 ssh -o ConnectTimeout=15 "zerops@$hostname" "zsc setSecretEnv foo bar" 2>/dev/null; then
+                    echo "✅ Bug workaround applied successfully for $hostname"
+                    break
+                else
+                    retry_count=$((retry_count + 1))
+                    echo "⚠️  Retry $retry_count/$max_retries: Waiting for service $hostname to be ready..."
+                    sleep 15
+                fi
+            done
+
+            if [ $retry_count -eq $max_retries ]; then
+                echo "❌ WARNING: Failed to apply bug workaround for $hostname after $max_retries attempts"
+                echo "   Run manually: timeout 15 ssh zerops@$hostname 'zsc setSecretEnv foo bar'"
             fi
-        done
 
-        if [ $retry_count -eq $max_retries ]; then
-            echo "❌ WARNING: Failed to apply bug workaround for $hostname after $max_retries attempts"
-            echo "   Run manually: timeout 15 ssh zerops@$hostname 'zsc setSecretEnv foo bar'"
+            return 0
+        else
+            echo "❌ FATAL: Failed to create runtime service $hostname"
+            rm -f "$yaml_file"
+            exit 1
         fi
-
-        return 0
     else
-        echo "❌ FATAL: Failed to create runtime service $hostname"
-        rm -f /tmp/runtime_import_${hostname}.yaml
+        echo "❌ FATAL: Failed to generate valid YAML for $hostname"
         exit 1
     fi
 }
@@ -116,20 +119,23 @@ create_managed_service() {
 
     echo "Creating managed service: $hostname ($type, $mode)"
 
-    cat > /tmp/managed_import_${hostname}.yaml << EOF
-services:
-  - hostname: $hostname
+    local yaml_file="/tmp/managed_import_${hostname}.yaml"
+    local yaml_content="  - hostname: $hostname
     type: $type
-    mode: $mode
-EOF
+    mode: $mode"
 
-    if zcli project service-import /tmp/managed_import_${hostname}.yaml --projectId "$projectId"; then
-        echo "✅ Managed service $hostname created successfully"
-        rm -f /tmp/managed_import_${hostname}.yaml
-        return 0
+    if create_service_batch_yaml "$yaml_file" "$yaml_content"; then
+        if zcli project service-import "$yaml_file" --projectId "$projectId"; then
+            echo "✅ Managed service $hostname created successfully"
+            rm -f "$yaml_file"
+            return 0
+        else
+            echo "❌ FATAL: Failed to create managed service $hostname"
+            rm -f "$yaml_file"
+            exit 1
+        fi
     else
-        echo "❌ FATAL: Failed to create managed service $hostname"
-        rm -f /tmp/managed_import_${hostname}.yaml
+        echo "❌ FATAL: Failed to generate valid YAML for $hostname"
         exit 1
     fi
 }

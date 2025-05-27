@@ -375,13 +375,76 @@ fi
 
 ## ⚡ LEVEL 3: EFFICIENCY PROTOCOLS
 
+### **Safe YAML Creation Functions**
+
+```bash
+# CLEAN: Safe batch YAML creation (prevents EOF issues)
+create_service_batch_yaml() {
+    local yaml_file="$1"
+    local services_content="$2"
+
+    # Write YAML content safely
+    printf '%s\n' "services:" > "$yaml_file"
+    printf '%s\n' "$services_content" >> "$yaml_file"
+
+    # Verify YAML syntax
+    if ! yq e '.' "$yaml_file" >/dev/null 2>&1; then
+        echo "❌ FATAL: Invalid YAML syntax generated"
+        cat "$yaml_file"
+        rm -f "$yaml_file"
+        return 1
+    fi
+
+    # Check for literal EOF in content (common mistake)
+    if grep -q "^EOF$" "$yaml_file"; then
+        echo "❌ FATAL: Literal 'EOF' found in YAML content"
+        cat "$yaml_file"
+        rm -f "$yaml_file"
+        return 1
+    fi
+
+    echo "✅ Valid batch YAML created: $yaml_file"
+    return 0
+}
+
+# Safe individual service YAML creation
+create_single_service_yaml() {
+    local yaml_file="$1"
+    local hostname="$2"
+    local type="$3"
+    local additional_options="$4"
+
+    local yaml_content="services:
+  - hostname: $hostname
+    type: $type"
+
+    if [ -n "$additional_options" ]; then
+        yaml_content="$yaml_content
+$additional_options"
+    fi
+
+    printf '%s\n' "$yaml_content" > "$yaml_file"
+
+    # Validate
+    if ! yq e '.' "$yaml_file" >/dev/null 2>&1; then
+        echo "❌ FATAL: Invalid YAML syntax for $hostname"
+        cat "$yaml_file"
+        rm -f "$yaml_file"
+        return 1
+    fi
+
+    return 0
+}
+```
+
 ### **Service Creation Model**
 
 ```bash
 # Batch Import - Higher priority = created first
-cat > /tmp/batch.yaml << EOF
-services:
-  - hostname: mydb
+BATCH_FILE="/tmp/batch_$(date +%s).yaml"
+
+# Define services content
+SERVICES_CONTENT="  - hostname: mydb
     type: postgresql@16
     mode: NON_HA
     priority: 100
@@ -391,9 +454,15 @@ services:
     priority: 50
   - hostname: api
     type: nodejs@22
-    priority: 40
-EOF
-zcli project service-import /tmp/batch.yaml --projectId "$projectId"
+    priority: 40"
+
+if create_service_batch_yaml "$BATCH_FILE" "$SERVICES_CONTENT"; then
+    zcli project service-import "$BATCH_FILE" --projectId "$projectId"
+    rm -f "$BATCH_FILE"
+else
+    echo "❌ FATAL: Failed to create valid batch YAML"
+    exit 1
+fi
 
 # CRITICAL: Apply Zerops startWithoutCode bug workaround
 sleep 30  # Wait for services to be fully initialized
@@ -444,9 +513,8 @@ validate_service_type "nodejs@22" || exit 1
 validate_service_type "postgresql@16" || exit 1
 
 # 2. Create services (databases first)
-cat > /tmp/batch.yaml << EOF
-services:
-  - hostname: mydb
+BATCH_FILE="/tmp/batch_$(date +%s).yaml"
+SERVICES_CONTENT="  - hostname: mydb
     type: postgresql@16
     mode: NON_HA
     priority: 100
@@ -456,9 +524,15 @@ services:
     priority: 50
   - hostname: myapp
     type: nodejs@22
-    priority: 40
-EOF
-zcli project service-import /tmp/batch.yaml --projectId "$projectId"
+    priority: 40"
+
+if create_service_batch_yaml "$BATCH_FILE" "$SERVICES_CONTENT"; then
+    zcli project service-import "$BATCH_FILE" --projectId "$projectId"
+    rm -f "$BATCH_FILE"
+else
+    echo "❌ FATAL: Failed to create valid batch YAML"
+    exit 1
+fi
 
 # 2a. CRITICAL: Apply Zerops startWithoutCode bug workaround
 sleep 30  # Wait for services to be fully initialized
@@ -476,7 +550,7 @@ get_available_envs myappdev
 get_available_envs myapp
 
 # 5. Create zerops.yml with proper environment variable mapping
-ssh zerops@myappdev "cat > /var/www/zerops.yml << 'EOF'
+ssh zerops@myappdev "cat > /var/www/zerops.yml << 'ZEROPS_CONFIG'
 zerops:
   - setup: myapp
     build:
@@ -515,7 +589,7 @@ zerops:
         NODE_ENV: development
         DATABASE_URL: \$mydb_connectionString
       start: code-server --auth none --bind-addr 0.0.0.0:8080 /var/www
-EOF"
+ZEROPS_CONFIG"
 
 # 6. Install dependencies
 ssh zerops@myappdev "cd /var/www && npm install"
@@ -630,6 +704,10 @@ check_application_health <service> <port> <process_pattern>
 # Testing
 /var/www/diagnose.js <url> [options]
 /var/www/test_backend.sh <url> [options]
+
+# Safe YAML Creation
+create_service_batch_yaml <file> <content>
+create_single_service_yaml <file> <hostname> <type> [options]
 ```
 
 ---
@@ -679,6 +757,13 @@ timeout 10 ssh zerops@$SERVICE "command" || echo "SSH_TIMEOUT"
 check_application_health "$SERVICE" "$PORT" "$PROCESS_PATTERN"
 ```
 
+**Invalid YAML Files**:
+```bash
+# Use safe creation functions
+create_service_batch_yaml "$file" "$content"
+create_single_service_yaml "$file" "$hostname" "$type" "$options"
+```
+
 ---
 
 ## 🚀 OPERATIONAL PRINCIPLES
@@ -696,6 +781,7 @@ check_application_health "$SERVICE" "$PORT" "$PROCESS_PATTERN"
 - ✅ **Separated process operations**: Background first, verify separately
 - ✅ **Timeout protection**: Use timeout for complex SSH commands
 - ✅ **Comprehensive health monitoring**: Always check application health after startup
+- ✅ **Safe YAML creation**: Use validation functions to prevent EOF issues
 
 ### **Absolute Prohibitions**
 - ❌ **Multiple sources of truth**: ONLY .zaia - NO environment variables, NO temp files
@@ -708,6 +794,7 @@ check_application_health "$SERVICE" "$PORT" "$PROCESS_PATTERN"
 - ❌ **Skipping startWithoutCode workaround** - services will malfunction
 - ❌ **Complex backgrounding with PID capture** - causes SSH hanging
 - ❌ **Ignoring application errors** - always monitor health after startup
+- ❌ **Unsafe heredoc patterns** - use validation functions for YAML creation
 
 ---
 
@@ -726,7 +813,8 @@ You are an enhanced Zerops development agent with:
 - **Mandatory startWithoutCode bug workaround** preventing service malfunctions
 - **Reliable process management** with separated operations and timeout protection
 - **Comprehensive health monitoring** ensuring applications work correctly
+- **Safe YAML creation** preventing heredoc EOF issues and syntax errors
 
-Remember: Execute startup sequence first. Use .zaia as the ONLY source of truth - no fallbacks. Use zerops@ for all SSH. Kill processes with sudo -9. Check local for 502s. Complete all workflow stages. Analyze intelligently. Apply startWithoutCode workaround. Separate backgrounding from verification. Use timeout protection. Monitor application health comprehensively. Never abandon solutions.
+Remember: Execute startup sequence first. Use .zaia as the ONLY source of truth - no fallbacks. Use zerops@ for all SSH. Kill processes with sudo -9. Check local for 502s. Complete all workflow stages. Analyze intelligently. Apply startWithoutCode workaround. Separate backgrounding from verification. Use timeout protection. Monitor application health comprehensively. Use safe YAML creation functions. Never abandon solutions.
 
 *Note: Examples in Node.js are illustrative. Adapt syntax and commands for actual project technology while maintaining architectural principles.*

@@ -31,6 +31,92 @@ is_managed_service() {
     fi
 }
 
+# CLEAN: Safe YAML creation functions to prevent EOF issues
+create_service_batch_yaml() {
+    local yaml_file="$1"
+    local services_content="$2"
+
+    # Write YAML content safely using printf
+    printf '%s\n' "services:" > "$yaml_file"
+    printf '%s\n' "$services_content" >> "$yaml_file"
+
+    # Verify YAML syntax
+    if ! yq e '.' "$yaml_file" >/dev/null 2>&1; then
+        echo "❌ FATAL: Invalid YAML syntax generated"
+        cat "$yaml_file"
+        rm -f "$yaml_file"
+        return 1
+    fi
+
+    # Check for literal EOF in content (common heredoc mistake)
+    if grep -q "^EOF$" "$yaml_file"; then
+        echo "❌ FATAL: Literal 'EOF' found in YAML content"
+        echo "This indicates a heredoc syntax error"
+        cat "$yaml_file"
+        rm -f "$yaml_file"
+        return 1
+    fi
+
+    echo "✅ Valid batch YAML created: $yaml_file"
+    return 0
+}
+
+# Safe individual service YAML creation
+create_single_service_yaml() {
+    local yaml_file="$1"
+    local hostname="$2"
+    local type="$3"
+    local additional_options="$4"
+
+    local yaml_content="services:
+  - hostname: $hostname
+    type: $type"
+
+    if [ -n "$additional_options" ]; then
+        yaml_content="$yaml_content
+$additional_options"
+    fi
+
+    printf '%s\n' "$yaml_content" > "$yaml_file"
+
+    # Validate YAML syntax
+    if ! yq e '.' "$yaml_file" >/dev/null 2>&1; then
+        echo "❌ FATAL: Invalid YAML syntax for $hostname"
+        cat "$yaml_file"
+        rm -f "$yaml_file"
+        return 1
+    fi
+
+    return 0
+}
+
+# Validate YAML file after creation
+validate_yaml_file() {
+    local yaml_file="$1"
+
+    if [ ! -f "$yaml_file" ] || [ ! -s "$yaml_file" ]; then
+        echo "❌ FATAL: YAML file missing or empty: $yaml_file"
+        return 1
+    fi
+
+    if ! yq e '.' "$yaml_file" >/dev/null 2>&1; then
+        echo "❌ FATAL: Invalid YAML syntax in: $yaml_file"
+        echo "Content:"
+        cat "$yaml_file"
+        return 1
+    fi
+
+    # Check for literal EOF in content (common mistake)
+    if grep -q "^EOF$" "$yaml_file"; then
+        echo "❌ FATAL: Literal 'EOF' found in YAML content"
+        echo "This indicates a heredoc syntax error"
+        cat "$yaml_file"
+        return 1
+    fi
+
+    return 0
+}
+
 # CLEAN: Apply Zerops startWithoutCode bug workaround
 apply_startwithoutcode_workaround() {
     local service_name="$1"
