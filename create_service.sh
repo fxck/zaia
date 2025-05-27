@@ -77,6 +77,30 @@ EOF
     if zcli project service-import /tmp/runtime_import_${hostname}.yaml --projectId "$projectId"; then
         echo "✅ Runtime service $hostname created successfully"
         rm -f /tmp/runtime_import_${hostname}.yaml
+
+        # CRITICAL: Zerops bug workaround for startWithoutCode services
+        echo "🔧 Applying Zerops startWithoutCode bug workaround..."
+        sleep 10  # Wait for service to be fully ready
+
+        local max_retries=5
+        local retry_count=0
+
+        while [ $retry_count -lt $max_retries ]; do
+            if ssh -o ConnectTimeout=15 "zerops@$hostname" "zsc setSecretEnv foo bar" 2>/dev/null; then
+                echo "✅ Bug workaround applied successfully for $hostname"
+                break
+            else
+                retry_count=$((retry_count + 1))
+                echo "⚠️  Retry $retry_count/$max_retries: Waiting for service $hostname to be ready..."
+                sleep 15
+            fi
+        done
+
+        if [ $retry_count -eq $max_retries ]; then
+            echo "❌ WARNING: Failed to apply bug workaround for $hostname after $max_retries attempts"
+            echo "   Run manually: ssh zerops@$hostname 'zsc setSecretEnv foo bar'"
+        fi
+
         return 0
     else
         echo "❌ FATAL: Failed to create runtime service $hostname"
@@ -137,11 +161,12 @@ echo "✅ Service creation completed successfully"
 echo ""
 echo "🔄 MANDATORY NEXT STEPS (.zaia ONLY):"
 echo "1. Wait 10-30 seconds for service initialization"
-echo "2. Sync to .zaia: /var/www/sync_env_to_zaia.sh"
-echo "3. Update discovery: /var/www/discover_services.sh"
-echo "4. Check status: /var/www/show_project_context.sh"
-echo "5. View env vars: get_available_envs <service_name>"
-echo "6. Get suggestions: suggest_env_vars <service_name>"
+echo "2. Verify bug workaround was applied (check output above)"
+echo "3. Sync to .zaia: /var/www/sync_env_to_zaia.sh"
+echo "4. Update discovery: /var/www/discover_services.sh"
+echo "5. Check status: /var/www/show_project_context.sh"
+echo "6. View env vars: get_available_envs <service_name>"
+echo "7. Get suggestions: suggest_env_vars <service_name>"
 
 echo ""
 echo "💡 Remember: All environment data is managed through .zaia ONLY"

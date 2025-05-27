@@ -31,6 +31,30 @@ is_managed_service() {
     fi
 }
 
+# CLEAN: Apply Zerops startWithoutCode bug workaround
+apply_startwithoutcode_workaround() {
+    local service_name="$1"
+    local max_retries="${2:-3}"
+    local retry_count=0
+
+    echo "🔧 Applying Zerops startWithoutCode bug workaround for $service_name..."
+
+    while [ $retry_count -lt $max_retries ]; do
+        if ssh -o ConnectTimeout=15 "zerops@$service_name" "zsc setSecretEnv foo bar" 2>/dev/null; then
+            echo "✅ Bug workaround applied successfully for $service_name"
+            return 0
+        else
+            retry_count=$((retry_count + 1))
+            echo "⚠️  Retry $retry_count/$max_retries: Waiting for service $service_name to be ready..."
+            sleep 15
+        fi
+    done
+
+    echo "❌ WARNING: Failed to apply bug workaround for $service_name after $max_retries attempts"
+    echo "   Run manually: ssh zerops@$service_name 'zsc setSecretEnv foo bar'"
+    return 1
+}
+
 # CLEAN: Get service ID from .zaia ONLY - NO FALLBACKS
 get_service_id() {
     local service_name="$1"
