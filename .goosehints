@@ -395,6 +395,52 @@ EOF
 cat > /tmp/services.yaml << EOF  # Can have heredoc issues
 ```
 
+### Handling File Modifications via SSH
+
+When modifying files over SSH (e.g., using `safe_ssh`), special care must be taken to preserve dollar signs (`$`) in the content. Dollar signs are often used as placeholders (like `$1`, `$2` in SQL queries) but can be misinterpreted by the shell as variables. Follow these steps to ensure they are written correctly:
+
+#### Rules for Handling Dollar Signs
+
+- **Use Single-Quoted Heredocs**: When writing multi-line content to a file, use a heredoc with single quotes around the delimiter (e.g., `'EOF'`) to prevent the shell from interpreting dollar signs.
+  **Correct Example**:
+  ```bash
+  safe_ssh "$SERVICE" "cat > /var/www/query.sql << 'EOF'
+  INSERT INTO users (name, email) VALUES ($1, $2)
+  EOF"
+  ```
+  - The single quotes around `'EOF'` ensure `$1` and `$2` remain literal in the file.
+
+- **Escape Dollar Signs Manually**: If a heredoc isn’t suitable, escape each dollar sign with a backslash (`\$`) in the command.
+  **Correct Example**:
+  ```bash
+  safe_ssh "$SERVICE" "echo 'INSERT INTO users (name, email) VALUES (\$1, \$2)' > /var/www/query.sql"
+  ```
+
+- **Avoid Unquoted Heredocs**: Without single quotes, the shell will strip dollar signs, breaking your content.
+  **Incorrect Example**:
+  ```bash
+  safe_ssh "$SERVICE" "cat > /var/www/query.sql << EOF
+  INSERT INTO users (name, email) VALUES ($1, $2)
+  EOF"
+  ```
+  - This writes `VALUES (, )` instead of `VALUES ($1, $2)`.
+
+#### Verification Step
+
+After modifying a file, always verify its contents to confirm dollar signs are preserved:
+```bash
+safe_ssh "$SERVICE" "cat /var/www/query.sql"
+```
+- Check that the output matches your intent (e.g., `VALUES ($1, $2)`). If dollar signs are missing, adjust your command and retry.
+
+#### Why This Matters
+
+- **Shell Behavior**: Bash interprets unescaped dollar signs as variables, which can empty or alter your content.
+- **Code Integrity**: Preserving placeholders like `$1`, `$2` is critical for parameterized queries or scripts.
+- **Reliability**: Verification ensures errors are caught early.
+
+Incorporate these practices into any SSH-based file modification workflow, including when using `safe_bg` or other helper functions.
+
 ## 🐛 PLATFORM BUGS & WORKAROUNDS
 
 ### StartWithoutCode Bug
