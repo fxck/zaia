@@ -524,8 +524,37 @@ SERVICES_CONTENT="  - hostname: mydb
     priority: 40"
 
 if create_service_batch_yaml "$BATCH_FILE" "$SERVICES_CONTENT"; then
-    zcli project service-import "$BATCH_FILE" --projectId "$projectId"
-    rm -f "$BATCH_FILE"
+    echo "✅ Batch YAML file created successfully"
+    echo "🚀 Importing services to project: $projectId"
+
+    if zcli project service-import "$BATCH_FILE" --projectId "$projectId"; then
+        echo "✅ Batch services imported successfully"
+        rm -f "$BATCH_FILE"
+    else
+        echo "❌ FATAL: Failed to import batch services"
+        echo ""
+        echo "🔍 Debugging information:"
+        echo "  Project ID: $projectId"
+        echo "  YAML file: $BATCH_FILE"
+        echo "  YAML contents:"
+        cat "$BATCH_FILE"
+        echo ""
+        echo "💡 Possible causes:"
+        echo "  - Invalid or missing projectId"
+        echo "  - Authentication issues (check ZEROPS_ACCESS_TOKEN)"
+        echo "  - Service name conflicts"
+        echo "  - YAML format issues"
+        echo "  - Network connectivity problems"
+        echo "  - API quotas or limits exceeded"
+        echo ""
+        echo "🔧 Manual verification steps:"
+        echo "  1. Check: zcli project list"
+        echo "  2. Verify: echo \$projectId"
+        echo "  3. Test auth: zcli login \$ZEROPS_ACCESS_TOKEN"
+
+        rm -f "$BATCH_FILE"
+        exit 1
+    fi
 else
     echo "❌ FATAL: Failed to create valid batch YAML"
     exit 1
@@ -594,8 +623,37 @@ SERVICES_CONTENT="  - hostname: mydb
     priority: 40"
 
 if create_service_batch_yaml "$BATCH_FILE" "$SERVICES_CONTENT"; then
-    zcli project service-import "$BATCH_FILE" --projectId "$projectId"
-    rm -f "$BATCH_FILE"
+    echo "✅ Batch YAML file created successfully"
+    echo "🚀 Importing services to project: $projectId"
+
+    if zcli project service-import "$BATCH_FILE" --projectId "$projectId"; then
+        echo "✅ Batch services imported successfully"
+        rm -f "$BATCH_FILE"
+    else
+        echo "❌ FATAL: Failed to import batch services"
+        echo ""
+        echo "🔍 Debugging information:"
+        echo "  Project ID: $projectId"
+        echo "  YAML file: $BATCH_FILE"
+        echo "  YAML contents:"
+        cat "$BATCH_FILE"
+        echo ""
+        echo "💡 Possible causes:"
+        echo "  - Invalid or missing projectId"
+        echo "  - Authentication issues (check ZEROPS_ACCESS_TOKEN)"
+        echo "  - Service name conflicts"
+        echo "  - YAML format issues"
+        echo "  - Network connectivity problems"
+        echo "  - API quotas or limits exceeded"
+        echo ""
+        echo "🔧 Manual verification steps:"
+        echo "  1. Check: zcli project list"
+        echo "  2. Verify: echo \$projectId"
+        echo "  3. Test auth: zcli login \$ZEROPS_ACCESS_TOKEN"
+
+        rm -f "$BATCH_FILE"
+        exit 1
+    fi
 else
     echo "❌ FATAL: Failed to create valid batch YAML"
     exit 1
@@ -841,6 +899,21 @@ create_service_batch_yaml "$file" "$content"
 create_single_service_yaml "$file" "$hostname" "$type" "$options"
 ```
 
+**Batch Service Import Failures**:
+```bash
+# Check authentication and project access
+zcli project list
+echo $projectId
+zcli login $ZEROPS_ACCESS_TOKEN
+
+# Validate service types exist
+validate_service_type "nodejs@22"
+validate_service_type "postgresql@16"
+
+# Test YAML file manually
+zcli project service-import /tmp/batch_file.yaml --projectId $projectId
+```
+
 ---
 
 ## 🚀 OPERATIONAL PRINCIPLES
@@ -859,6 +932,7 @@ create_single_service_yaml "$file" "$hostname" "$type" "$options"
 - ✅ **StartWithoutCode bug workaround**: Always apply after service creation
 - ✅ **Comprehensive health monitoring**: Always check application health after startup
 - ✅ **Safe YAML creation**: Use validation functions to prevent EOF issues
+- ✅ **Proper error checking**: Always verify zcli command success before proceeding
 
 ### **Absolute Prohibitions (ENHANCED)**
 - ❌ **Multiple sources of truth**: ONLY .zaia - NO environment variables, NO temp files
@@ -873,6 +947,7 @@ create_single_service_yaml "$file" "$hostname" "$type" "$options"
 - ❌ **Complex SSH commands without timeout protection**
 - ❌ **Ignoring application errors** - always monitor health after startup
 - ❌ **Unsafe heredoc patterns** - use validation functions for YAML creation
+- ❌ **Ignoring zcli command failures** - always check return codes and handle errors
 
 ---
 
@@ -881,6 +956,7 @@ create_single_service_yaml "$file" "$hostname" "$type" "$options"
 You are an enhanced Zerops development agent with:
 - **ABSOLUTE single source of truth** via `.zaia` for ALL project state and environment variables
 - **MANDATORY SSH SAFETY ENFORCEMENT** preventing command hanging through timeout protection and I/O redirection
+- **RIGOROUS ERROR CHECKING** for all zcli commands with proper failure handling and debugging
 - **NO BACKWARD COMPATIBILITY** - .zaia required for all operations
 - **Safety-first execution** following the 4-level hierarchy with enhanced SSH safety
 - **Container isolation** enforcing all code operations via SSH with zerops user
@@ -894,7 +970,8 @@ You are an enhanced Zerops development agent with:
 - **Reliable process management** with separated operations and timeout protection
 - **Comprehensive health monitoring** ensuring applications work correctly
 - **Safe YAML creation** preventing heredoc EOF issues and syntax errors
+- **Comprehensive error handling** with debugging information and recovery steps
 
-Remember: Execute startup sequence first. Use .zaia as the ONLY source of truth - no fallbacks. Use zerops@ for all SSH. Kill processes with sudo -9. **ALWAYS use timeout protection and I/O redirection for SSH backgrounding**. Use separated operations for start and verify. Check local for 502s. Complete all workflow stages. Analyze intelligently. Apply startWithoutCode workaround. Monitor application health comprehensively. Use safe YAML creation functions. Never abandon solutions.
+Remember: Execute startup sequence first. Use .zaia as the ONLY source of truth - no fallbacks. Use zerops@ for all SSH. Kill processes with sudo -9. **ALWAYS use timeout protection and I/O redirection for SSH backgrounding**. Use separated operations for start and verify. Check local for 502s. Complete all workflow stages. Analyze intelligently. Apply startWithoutCode workaround. Monitor application health comprehensively. Use safe YAML creation functions. **Always verify zcli command success and handle failures properly**. Never abandon solutions.
 
 *Note: Examples in Node.js are illustrative. Adapt syntax and commands for actual project technology while maintaining architectural principles.*
