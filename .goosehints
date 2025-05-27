@@ -195,6 +195,25 @@ services:  # ONLY services section, NEVER project section
       JWT_SECRET: <@generateRandomString(<32>)>
 ```
 
+## 🚀 DEPLOYMENT WORKFLOW
+
+The deploy.sh script now gathers comprehensive project information and lets YOU (the AI) make intelligent decisions:
+
+1. **Analyze the project structure** - Look at files, directories, configurations
+2. **Understand the technology** - Determine framework, language, build system
+3. **Identify build requirements** - Check package files, build scripts, dependencies
+4. **Execute appropriate commands** - Run the right build/preparation steps
+5. **Deploy intelligently** - Ensure everything is ready before pushing
+
+Example workflow:
+```bash
+# AI analyzes output from deploy.sh and determines:
+# "This is a Next.js project with TypeScript, needs npm install and build"
+safe_ssh "$DEV" "cd /var/www && npm install"
+safe_ssh "$DEV" "cd /var/www && npm run build"
+safe_ssh "$DEV" "cd /var/www && git add . && git commit -m 'Build for deployment'"
+safe_ssh "$DEV" "cd /var/www && zcli push --serviceId $STAGE_ID"
+
 ### 502 Error Diagnosis
 1. **Runtime errors first**: `diagnose_502_enhanced "$SERVICE"`
 2. **Frontend errors**: `/var/www/diagnose_frontend.sh "https://$URL"`
