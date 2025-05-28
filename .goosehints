@@ -69,26 +69,533 @@ safe_ssh "$DEV" "zcli login $ZEROPS_ACCESS_TOKEN"
 }
 ```
 
+## 🎯 PROBLEM-SOLVING PERSISTENCE PROTOCOL
+
+**ABSOLUTE RULE**: NEVER abandon a problem. ALWAYS debug systematically and intelligently.
+
+### Debugging Hierarchy
+
+1. **Understand the Error**
+   - Read FULL error messages
+   - Identify root cause vs symptoms
+   - Check error patterns in logs
+
+2. **Intelligent Resolution**
+   - Fix the ACTUAL problem, not symptoms
+   - Use framework knowledge to resolve issues
+   - Apply domain expertise
+
+3. **Never Switch Languages/Approaches**
+   - If TypeScript fails, FIX TypeScript
+   - If dependencies fail, RESOLVE dependencies
+   - If build fails, DEBUG the build
+
+### Active Log Monitoring Protocol
+
+**CRITICAL**: NEVER wait blindly. ALWAYS check logs actively during:
+- Build processes
+- Deployments
+- Service startup
+- Error conditions
+
+```bash
+# Build/Deploy Monitoring Pattern
+# 1. Start deployment
+safe_ssh "$DEV" "cd /var/www && zcli push --serviceId $STAGE_ID"
+
+# 2. Wait briefly for process to start
+sleep 5
+
+# 3. ACTIVELY monitor build logs
+for i in {1..20}; do
+    echo "🔍 Checking build status (attempt $i/20)..."
+
+    # Check build logs
+    BUILD_STATUS=$(zcli service log --serviceId "$STAGE_ID" --showBuildLogs --limit 50 --format SHORT)
+
+    # Check for completion patterns
+    if echo "$BUILD_STATUS" | grep -q "Build completed\|Deployment successful\|Successfully built"; then
+        echo "✅ Build completed successfully"
+        break
+    fi
+
+    # Check for errors
+    if echo "$BUILD_STATUS" | grep -q "Build failed\|Error:\|FATAL:\|npm ERR!\|error TS"; then
+        echo "❌ Build failed - analyzing error..."
+        echo "$BUILD_STATUS" | tail -30
+
+        # Extract specific error
+        ERROR_TYPE=$(echo "$BUILD_STATUS" | grep -E "Error:|npm ERR!|error TS" | head -5)
+
+        # Apply intelligent fixes based on error type
+        if echo "$ERROR_TYPE" | grep -q "Cannot find module"; then
+            echo "📦 Missing dependency detected - installing..."
+            # Fix the specific missing module
+        elif echo "$ERROR_TYPE" | grep -q "error TS"; then
+            echo "🔧 TypeScript error - analyzing..."
+            # Fix TypeScript configuration
+        fi
+
+        # DON'T give up - fix and retry
+        break
+    fi
+
+    # Still building - wait briefly before next check
+    sleep 5
+done
+
+# 4. Verify deployment after build
+sleep 5
+zcli service log --serviceId "$STAGE_ID" --limit 20 --format SHORT
+```
+
+### Optimized Wait Times
+
+**NEVER use long sleeps. Use intelligent polling:**
+
+```bash
+# ❌ BAD - Blind waiting
+sleep 60
+
+# ✅ GOOD - Active monitoring with short intervals
+for i in {1..12}; do  # Max 1 minute total
+    if <check_condition>; then
+        break
+    fi
+    sleep 5
+done
+
+# Service creation wait pattern
+zcli project service-import /tmp/services.yaml --projectId "$projectId"
+sleep 10  # Initial wait for service provisioning
+
+# Then poll for readiness
+for i in {1..6}; do  # Max 30 seconds
+    if /var/www/init_project.sh 2>/dev/null; then
+        echo "✅ Services ready"
+        break
+    fi
+    echo "⏳ Waiting for services... ($i/6)"
+    sleep 5
+done
+```
+
+### Dependency Resolution Intelligence
+
+```bash
+# Common Node.js dependency resolution patterns
+
+# 1. Version mismatch - use intelligent resolution
+safe_ssh "$SERVICE" "cd /var/www && npm ls <package>"  # Check actual vs expected
+safe_ssh "$SERVICE" "cd /var/www && npm install <package>@<compatible-version>"
+
+# 2. Peer dependency issues
+safe_ssh "$SERVICE" "cd /var/www && npm install --legacy-peer-deps"  # For React 17/18 conflicts
+safe_ssh "$SERVICE" "cd /var/www && npm install --force"  # Override when certain
+
+# 3. TypeScript module resolution
+safe_ssh "$SERVICE" "cd /var/www && npm install --save-dev @types/<package>"
+safe_ssh "$SERVICE" "cd /var/www && npx tsc --traceResolution"  # Debug imports
+
+# 4. Clean slate approach (when corrupted)
+safe_ssh "$SERVICE" "cd /var/www && rm -rf node_modules package-lock.json && npm install"
+
+# 5. Check Node version compatibility
+safe_ssh "$SERVICE" "node --version && npm --version"
+safe_ssh "$SERVICE" "cd /var/www && npx npm-check-updates"
+```
+
+### Build Failure Protocol
+
+**NEVER switch to a different language. ALWAYS fix the current setup.**
+
+```bash
+# TypeScript build failures
+# 1. Check tsconfig.json
+safe_ssh "$SERVICE" "cd /var/www && cat tsconfig.json"
+
+# 2. Common fixes for TypeScript
+safe_ssh "$SERVICE" "cd /var/www && npx tsc --noEmit"  # Type check only
+safe_ssh "$SERVICE" "cd /var/www && npx tsc --listFiles"  # See what's included
+safe_ssh "$SERVICE" "cd /var/www && npx tsc --skipLibCheck"  # Skip node_modules checking
+
+# 3. Module resolution issues
+safe_ssh "$SERVICE" "cat > /var/www/tsconfig.json << 'EOF'
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "lib": ["ES2020"],
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "moduleResolution": "node",
+    "allowSyntheticDefaultImports": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
+EOF"
+```
+
+### SQL Parameter Preservation
+
+**CRITICAL**: PostgreSQL uses $1, $2 placeholders. ALWAYS preserve them correctly.
+
+```bash
+# ✅ CORRECT - Create complete queries with parameters
+safe_ssh "$SERVICE" "cat > /var/www/src/queries.js << 'EOF'
+const queries = {
+  createUser: 'INSERT INTO users (name, email) VALUES ($1, $2) RETURNING *',
+  updateUser: 'UPDATE users SET name = $1, email = $2 WHERE id = $3',
+  deleteUser: 'DELETE FROM users WHERE id = $1',
+  getUser: 'SELECT * FROM users WHERE id = $1',
+  listUsers: 'SELECT * FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2'
+};
+module.exports = queries;
+EOF"
+
+# NEVER use sed to fix parameters - create files correctly the first time
+```
+
+### Framework-Specific Dependency Patterns
+
+```bash
+# Next.js common issues
+safe_ssh "$SERVICE" "cd /var/www && npm install next@latest react@latest react-dom@latest"
+safe_ssh "$SERVICE" "cd /var/www && npm install --save-dev @types/react @types/node"
+
+# Express + TypeScript
+safe_ssh "$SERVICE" "cd /var/www && npm install express && npm install --save-dev @types/express @types/node typescript ts-node nodemon"
+
+# Common dev dependencies for any Node.js project
+safe_ssh "$SERVICE" "cd /var/www && npm install --save-dev typescript ts-node @types/node nodemon"
+```
+
+### Error Pattern Recognition
+
+When encountering errors, match patterns and apply fixes:
+
+```bash
+# "Cannot find module" → Install it
+# "Type error" → Install @types or fix tsconfig
+# "Version conflict" → Use --legacy-peer-deps or specific versions
+# "ENOENT" → File doesn't exist, check paths
+# "EACCES" → Permission issue, check ownership
+# "ETIMEDOUT" → Network issue, retry or check proxy
+```
+
+### Deployment Monitoring Best Practices
+
+```bash
+# Complete deployment workflow with active monitoring
+
+# 1. Authenticate in dev service
+safe_ssh "$DEV" "zcli login $ZEROPS_ACCESS_TOKEN"
+
+# 2. Start deployment
+STAGE_ID=$(get_service_id "$STAGE")
+safe_ssh "$DEV" "cd /var/www && zcli push --serviceId $STAGE_ID"
+
+# 3. Monitor build actively
+sleep 5  # Initial wait
+BUILD_SUCCESS=false
+
+for i in {1..24}; do  # 2 minutes max
+    echo "📊 Monitoring build... (check $i/24)"
+
+    # Get latest build logs
+    BUILD_LOG=$(zcli service log --serviceId "$STAGE_ID" --showBuildLogs --limit 100 --format SHORT)
+
+    # Check for success
+    if echo "$BUILD_LOG" | grep -q "Build successful\|Deployment completed"; then
+        echo "✅ Build successful!"
+        BUILD_SUCCESS=true
+        break
+    fi
+
+    # Check for errors and debug
+    if echo "$BUILD_LOG" | grep -q "Build failed\|error\|Error"; then
+        echo "❌ Build error detected:"
+        echo "$BUILD_LOG" | grep -B5 -A5 "error\|Error" | tail -20
+
+        # Don't give up - analyze and fix
+        if echo "$BUILD_LOG" | grep -q "Cannot find module"; then
+            MODULE=$(echo "$BUILD_LOG" | grep "Cannot find module" | sed "s/.*Cannot find module '\([^']*\)'.*/\1/")
+            echo "Installing missing module: $MODULE"
+            safe_ssh "$DEV" "cd /var/www && npm install $MODULE"
+            # Retry deployment
+        fi
+        break
+    fi
+
+    sleep 5
+done
+
+# 4. Enable subdomain if build successful
+if [ "$BUILD_SUCCESS" = true ]; then
+    zcli service enable-subdomain --serviceId "$STAGE_ID"
+
+    # Wait for service to start
+    sleep 10
+
+    # Check runtime logs
+    echo "🚀 Checking runtime status..."
+    zcli service log --serviceId "$STAGE_ID" --limit 30 --format SHORT
+fi
+```
+
 ## 🔧 GOOSE EXECUTION PATTERNS
 
-**CRITICAL**: Goose has limitations with complex shell syntax. Use these patterns for ALL file operations:
+### 📝 UNIVERSAL FILE CREATION PATTERN - MASTER GUIDE
 
-### Universal File Creation Pattern
+**CRITICAL RULES FOR HEREDOC SUCCESS:**
 
-**For ANY file type** (YAML, scripts, configs, code, SQL, HTML, etc.):
+1. **EOF PLACEMENT IS SACRED**
+   ```bash
+   # ✅ CORRECT - EOF alone on line, NO spaces, NO tabs
+   cat > file << 'EOF'
+   content
+   EOF
+
+   # ❌ FAILURES - ALL OF THESE WILL BREAK
+   cat > file << 'EOF'
+   content
+     EOF      # Indented = FAIL
+   EOF 2>&1   # Extra text = FAIL
+   EOF;       # Semicolon = FAIL
+   EOF        # Trailing space = FAIL (invisible but deadly)
+   ```
+
+2. **HEREDOC DEBUGGING PROTOCOL**
+   ```bash
+   # After EVERY file creation, ALWAYS verify:
+
+   # Step 1: Check file exists
+   [ -f /path/to/file ] && echo "✅ File created" || echo "❌ File missing"
+
+   # Step 2: Check file size
+   [ -s /path/to/file ] && echo "✅ File has content" || echo "❌ File empty"
+
+   # Step 3: Preview first/last lines
+   head -2 /path/to/file && echo "..." && tail -2 /path/to/file
+
+   # Step 4: For YAML/JSON, validate syntax
+   yq e '.' /path/to/file >/dev/null 2>&1 && echo "✅ Valid YAML" || echo "❌ Invalid YAML"
+   ```
+
+3. **SAFE SERVICE CREATION PATTERN**
+   ```bash
+   # Complete pattern with verification
+   YAML_FILE="/tmp/services_$(date +%s).yaml"
+
+   # Create with clean heredoc
+   cat > "$YAML_FILE" << 'EOF'
+   services:
+     - hostname: db
+       type: postgresql@16
+       mode: NON_HA
+       priority: 100
+     - hostname: apidev
+       type: nodejs@22
+       startWithoutCode: true
+       priority: 50
+       envVariables:
+         NODE_ENV: development
+         DATABASE_URL: ${db_connectionString}
+     - hostname: api
+       type: nodejs@22
+       priority: 40
+       envVariables:
+         NODE_ENV: production
+         DATABASE_URL: ${db_connectionString}
+   EOF
+
+   # MANDATORY verification
+   if [ -f "$YAML_FILE" ] && [ -s "$YAML_FILE" ]; then
+       echo "✅ YAML file created successfully"
+
+       # Validate YAML syntax
+       if yq e '.' "$YAML_FILE" >/dev/null 2>&1; then
+           echo "✅ YAML syntax valid"
+
+           # Show what will be created
+           echo "📋 Services to create:"
+           yq e '.services[].hostname' "$YAML_FILE"
+
+           # Import with proper error handling
+           if zcli project service-import "$YAML_FILE" --projectId "$projectId"; then
+               echo "✅ Services imported successfully"
+           else
+               echo "❌ Import failed - debugging:"
+               echo "1. Check projectId: echo \$projectId"
+               echo "2. Verify auth: zcli project list"
+               echo "3. Validate YAML: yq e '.' $YAML_FILE"
+           fi
+       else
+           echo "❌ Invalid YAML - check syntax"
+           cat "$YAML_FILE"
+       fi
+   else
+       echo "❌ File creation failed"
+   fi
+   ```
+
+4. **HEREDOC SYNTAX REFERENCE**
+   ```bash
+   # Single-quoted (RECOMMENDED - preserves all special chars)
+   cat > file << 'EOF'
+   ${variables} are preserved literally
+   $100 price preserved
+   `commands` not executed
+   EOF
+
+   # Double-quoted (variables expand)
+   cat > file << "EOF"
+   ${USER} expands to actual username
+   $HOME expands to home directory
+   EOF
+
+   # Unquoted (AVOID - variables expand)
+   cat > file << EOF
+   Variables expand here too
+   EOF
+
+   # With indentation (- prefix)
+   cat > file <<- 'EOF'
+   	This allows indented content
+   	But EOF must still be unindented
+   EOF
+   ```
+
+5. **COMMON PITFALLS & FIXES**
+   ```bash
+   # PITFALL 1: Copy-paste adds trailing spaces
+   # FIX: Always type EOF manually, never copy-paste
+
+   # PITFALL 2: IDE auto-indent
+   # FIX: Disable auto-indent or manually unindent EOF
+
+   # PITFALL 3: Command chaining after heredoc
+   # WRONG:
+   cat > file << 'EOF' && echo "done"
+   content
+   EOF
+
+   # RIGHT:
+   cat > file << 'EOF'
+   content
+   EOF
+   && echo "done"
+
+   # PITFALL 4: Nested heredocs
+   # Use different delimiters or create files sequentially
+   cat > outer << 'OUTER'
+   cat > inner << 'INNER'
+   content
+   INNER
+   OUTER
+   ```
+
+6. **EMERGENCY RECOVERY**
+   ```bash
+   # If heredoc fails mysteriously:
+
+   # Method 1: Use printf
+   printf '%s\n' \
+   'services:' \
+   '  - hostname: db' \
+   '    type: postgresql@16' \
+   > /tmp/services.yaml
+
+   # Method 2: Use echo with -e
+   echo -e 'services:\n  - hostname: db\n    type: postgresql@16' > /tmp/services.yaml
+
+   # Method 3: Base64 encode locally, decode remotely
+   echo 'c2VydmljZXM6Ci4uLg==' | base64 -d > /tmp/services.yaml
+
+   # Method 4: Create via SSH if local fails
+   safe_ssh "$SERVICE" "cat > /tmp/remote.yaml << 'EOF'
+   content
+   EOF"
+   ```
+
+7. **YAML-SPECIFIC SAFETY**
+   ```bash
+   # Always validate service types BEFORE YAML creation
+   validate_service_type "nodejs@22" || exit 1
+   validate_service_type "postgresql@16" || exit 1
+
+   # Use the safe YAML creator function
+   create_safe_yaml /tmp/services.yaml << 'EOF'
+   services:
+     - hostname: myapp
+       type: nodejs@22
+   EOF
+   ```
+
+### 🚨 HEREDOC GOLDEN RULES
+
+1. **EOF is a NEWLINE TERMINATOR** - It must start at column 0 and end with a newline
+2. **NO CHARACTERS AFTER EOF** - Not even spaces (they're invisible killers)
+3. **VERIFY EVERY FILE** - Trust but verify with file size and syntax checks
+4. **USE SINGLE QUOTES** - Preserve special characters, prevent expansion
+5. **TYPE EOF MANUALLY** - Copy-paste introduces hidden characters
+6. **DEBUG SYSTEMATICALLY** - Check existence → size → content → syntax
+
+### 🛡️ DEFENSIVE PROGRAMMING PATTERN
+
 ```bash
-# ✅ ALWAYS use cat with single-quoted heredoc
-# CRITICAL: The closing EOF must be on its own line with NO indentation
-cat > /path/to/file << 'EOF'
-content with ${preserved_vars} and $symbols
+# The paranoid but safe approach
+create_verified_yaml() {
+    local file="$1"
+    local temp_file="${file}.tmp"
+
+    # Create with heredoc
+    cat > "$temp_file" << 'EOF'
+services:
+  - hostname: db
+    type: postgresql@16
+    mode: NON_HA
 EOF
 
-# ❌ NEVER use these patterns in Goose
-command << EOF          # Unquoted heredoc - strips $
-command < <(echo "...")  # Process substitution
-command | tee file      # Complex pipes
-$(...) in heredocs      # Command substitution
+    # Verify creation
+    if [ ! -f "$temp_file" ]; then
+        echo "❌ CRITICAL: Failed to create file"
+        return 1
+    fi
+
+    # Verify content
+    if [ ! -s "$temp_file" ]; then
+        echo "❌ CRITICAL: File is empty"
+        rm -f "$temp_file"
+        return 1
+    fi
+
+    # Verify YAML syntax
+    if ! yq e '.' "$temp_file" >/dev/null 2>&1; then
+        echo "❌ CRITICAL: Invalid YAML syntax"
+        echo "Content was:"
+        cat "$temp_file"
+        rm -f "$temp_file"
+        return 1
+    fi
+
+    # All good, move to final location
+    mv "$temp_file" "$file"
+    echo "✅ Created valid YAML: $file"
+    return 0
+}
+
+# Usage
+create_verified_yaml /tmp/services.yaml || exit 1
 ```
+
+Remember: **In Goose, EOF placement is the difference between success and hours of debugging!**
 
 ### Safe Pattern Examples
 
@@ -103,22 +610,22 @@ EOF
 
 # Creating SQL with placeholders
 safe_ssh "$SERVICE" "cat > /var/www/query.sql << 'EOF'
-INSERT INTO users (name, email) VALUES (\$1, \$2);
-SELECT * FROM products WHERE price > \$100;
+INSERT INTO users (name, email) VALUES ($1, $2);
+SELECT * FROM products WHERE price > $100;
 EOF"
 
 # Creating shell scripts
 cat > /tmp/deploy.sh << 'EOF'
 #!/bin/bash
-echo "Price: \$100"
-API_KEY="\${API_KEY:-default}"
+echo "Price: $100"
+API_KEY="${API_KEY:-default}"
 EOF
 chmod +x /tmp/deploy.sh
 
 # Creating application code
 safe_ssh "$DEV" "cat > /var/www/app.js << 'EOF'
 const price = 100; // $100
-const query = 'SELECT * FROM users WHERE id = \$1';
+const query = 'SELECT * FROM users WHERE id = $1';
 EOF"
 ```
 
@@ -524,10 +1031,12 @@ safe_bg "$SERVICE" "npm run dev" "/var/www" "npm.*dev"
 
 ### StartWithoutCode Bug
 
-🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨 Services with `startWithoutCode: true` REQUIRE workaround:
+🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨 Services with `startWithoutCode: true` REQUIRE workaround (service needs to be restarted after!!!):
 ```bash
 # Automatic with retry logic
 apply_workaround "$SERVICE"
+
+# restart here
 
 # Manual if needed
 timeout 15 ssh zerops@$SERVICE "zsc setSecretEnv foo bar"
@@ -607,9 +1116,18 @@ EOF
 
 zcli project service-import /tmp/services.yaml --projectId "$projectId"
 
-# 3. Wait and initialize
-sleep 30
-/var/www/init_project.sh
+# 3. Wait and initialize (optimized wait times)
+sleep 10  # Initial service provisioning
+
+# Poll for readiness
+for i in {1..6}; do
+    if /var/www/init_project.sh 2>/dev/null; then
+        echo "✅ Services ready"
+        break
+    fi
+    echo "⏳ Waiting for services... ($i/6)"
+    sleep 5
+done
 
 # 4. Setup development
 safe_ssh "apidev" "mkdir -p /var/www && cd /var/www"
@@ -669,9 +1187,9 @@ EOF"
 monitor_reload "$DEV" "pages/index.js"
 ```
 
-### 4. Intelligent Deployment
+### 4. Intelligent Deployment with Active Monitoring
 
-The deployment process uses AI intelligence:
+The deployment process uses AI intelligence with active log monitoring:
 
 ```bash
 # Authenticate zcli in dev service first
@@ -688,12 +1206,45 @@ safe_ssh "$DEV" "cd /var/www && git init"
 safe_ssh "$DEV" "cd /var/www && git add -A"
 safe_ssh "$DEV" "cd /var/www && git commit -m 'Deploy: $(date +%Y-%m-%d_%H:%M:%S)'"
 
-# 2. Deploy
+# 2. Deploy with active monitoring
 STAGE_ID=$(get_service_id "$STAGE")
 safe_ssh "$DEV" "cd /var/www && zcli push --serviceId $STAGE_ID"
 
-# 3. Enable subdomain
-zcli service enable-subdomain --serviceId "$STAGE_ID"
+# 3. Monitor build logs actively
+sleep 5
+DEPLOY_SUCCESS=false
+
+for i in {1..20}; do
+    echo "📊 Checking deployment status... ($i/20)"
+
+    # Check build logs
+    BUILD_LOG=$(zcli service log --serviceId "$STAGE_ID" --showBuildLogs --limit 50 --format SHORT)
+
+    if echo "$BUILD_LOG" | grep -q "Build successful\|Deployment completed"; then
+        echo "✅ Deployment successful!"
+        DEPLOY_SUCCESS=true
+        break
+    fi
+
+    if echo "$BUILD_LOG" | grep -q "Build failed\|Error"; then
+        echo "❌ Build error detected:"
+        echo "$BUILD_LOG" | grep -B3 -A3 "Error" | tail -20
+        # Don't give up - analyze and fix
+        break
+    fi
+
+    sleep 5
+done
+
+# 4. Enable subdomain if successful
+if [ "$DEPLOY_SUCCESS" = true ]; then
+    zcli service enable-subdomain --serviceId "$STAGE_ID"
+    sleep 5
+
+    # Verify deployment
+    echo "🚀 Checking runtime logs..."
+    zcli service log --serviceId "$STAGE_ID" --limit 30 --format SHORT
+fi
 ```
 
 ## 🚀 KEY FUNCTIONS
@@ -776,8 +1327,18 @@ restart_service_for_envs "$SERVICE" "sync environment"
 
 **Build Failures**:
 ```bash
-# Use --force to deploy anyway
-/var/www/deploy.sh "$DEV" --force
+# NEVER give up - check logs and fix
+for i in {1..10}; do
+    BUILD_LOG=$(zcli service log --serviceId "$STAGE_ID" --showBuildLogs --limit 100)
+
+    if echo "$BUILD_LOG" | grep -q "Cannot find module"; then
+        MODULE=$(echo "$BUILD_LOG" | grep -oP "Cannot find module '\K[^']+")
+        safe_ssh "$DEV" "cd /var/www && npm install $MODULE"
+        # Retry deployment
+    fi
+
+    sleep 5
+done
 ```
 
 **Frontend Not Loading**:
@@ -829,6 +1390,12 @@ safe_ssh "$SERVICE" "node /var/www/db-op.js"
 15. **Preserve dollar signs**: Always use single-quoted heredocs ('EOF')
 16. **Initialize with CLIs**: Use framework CLIs for proper project structure
 17. **Use files for complex code**: Especially with SQL parameters or nested quotes
+18. **NEVER GIVE UP**: Debug systematically, fix the actual problem
+19. **Persist with chosen stack**: If TypeScript, stay TypeScript
+20. **Apply domain knowledge**: Use framework expertise to resolve issues
+21. **ACTIVELY MONITOR**: Never wait blindly - always check logs
+22. **USE SHORT INTERVALS**: 5-10 second waits, not 30-60
+23. **CHECK BUILD LOGS**: During deployments, always monitor progress
 
 Remember:
 - Validate all inputs
@@ -841,3 +1408,6 @@ Remember:
 - Debug failures with context before fallbacks
 - EOF must never be indented
 - Use file creation for complex commands with special characters
+- **PERSISTENCE IS KEY**: Never abandon problems, always debug intelligently
+- **MONITOR ACTIVELY**: Check logs during all operations
+- **USE EFFICIENT TIMING**: Short polling intervals, not long sleeps
