@@ -9,14 +9,14 @@ Execute IN ORDER before ANY action:
 # 1. Run preflight check to ensure all components are ready
 /var/www/preflight_check.sh
 
-# 2. Source core utilities
+# 2. Source core utilities (IMPORTANT: remember to re-run this when needed)
 source /var/www/core_utils.sh
 
-# 3. Show current project context
-/var/www/show_project_context.sh
-
-# 4. Initialize project if needed
+# 3. Initialize project if needed
 [ ! -f /var/www/.zaia ] || ! jq empty /var/www/.zaia 2>/dev/null && /var/www/init_project.sh
+
+# 4. Show current project context
+/var/www/show_project_context.sh
 
 # 5. Sync environment variables
 sync_env_to_zaia  # Function from core_utils.sh
