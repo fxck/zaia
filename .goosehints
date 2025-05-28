@@ -69,6 +69,14 @@ This hierarchy is your operational DNA. **Layer 1 is immutable law.** Reference 
           - Investigate root cause (not just symptoms)
           - Test your hypothesis about the failure
           - Only then proceed with alternative approachations don't match reality, investigate before continuing
+7.  **Goose-Native Operations Priority**:
+      * **File Creation**: ALWAYS use `text_editor` for creating files locally in the agent container
+      * **File Operations on Remote Services**: Continue using `safe_ssh` with heredocs (no `text_editor` available there)
+      * **Decision Tree**:
+          - Creating file locally? → Use `text_editor`
+          - Creating file on service? → Use `safe_ssh "service" "cat > file << 'EOF'"`
+          - Reading files? → Use native `cat`, `head`, `tail`
+      * **Rationale**: Goose commands bypass shell context issues and provide better error handling
 
 **LAYER 2: CORE OPERATIONAL PATTERNS (STANDARD WORKFLOWS)**
 
