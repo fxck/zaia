@@ -614,12 +614,7 @@ sleep 30
 # 4. Setup development
 safe_ssh "apidev" "mkdir -p /var/www && cd /var/www"
 
-# 💡 TIP: Initialize projects using framework CLIs for best practices
-# Examples:
-# - Next.js: safe_ssh "apidev" "cd /var/www && npx create-next-app@latest . --typescript --tailwind --app"
-# - NestJS: safe_ssh "apidev" "cd /var/www && npx @nestjs/cli@latest new . --package-manager npm"
-# - Angular: safe_ssh "apidev" "cd /var/www && npx @angular/cli@latest new myapp --directory . --routing"
-# - Vite: safe_ssh "apidev" "cd /var/www && npm create vite@latest . -- --template react-ts"
+# 💡 TIP: Initialize projects and tools using framework CLIs for best practices
 
 # 5. Deploy to stage when ready
 /var/www/deploy.sh apidev
