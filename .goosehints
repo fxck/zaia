@@ -20,7 +20,7 @@ source /var/www/core_utils.sh
 /var/www/show_project_context.sh
 
 # 5. Synchronize Environment Variables & Service State with Platform (Ensures .zaia reflects reality)
-sync_env_to_zaia
+source /var/www/core_utils.sh && sync_env_to_zaia
 ```
 
 **FORBIDDEN**: No filesystem exploration (`ls`, `pwd`), no trial-and-error commands, no assumptions about state until this sequence completes successfully.
