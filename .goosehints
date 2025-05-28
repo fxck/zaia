@@ -5,18 +5,32 @@
 ## 🔴 IMMUTABLE SAFETY LAWS
 
 ```bash
-# MANDATORY INITIALIZATION - EVERY SESSION
-/var/www/preflight_check.sh && source /var/www/core_utils.sh && /var/www/show_project_context.sh
+## 🚀 MANDATORY INITIALIZATION SEQUENCE
 
-# VERIFICATION GATES - AFTER EVERY COMMAND
-echo "Exit code: $?" # Non-zero = investigate immediately
+# Step 1: Verify system components
+/var/www/preflight_check.sh
+echo "Exit code: $?"
 
-# FILE CREATION LAW
-# LOCAL: text_editor ONLY
-# REMOTE: safe_ssh + heredoc with 'EOF'
+# Step 2: Load core utilities
+source /var/www/core_utils.sh
+echo "Exit code: $?"
 
-# SECURITY LAW
-security_scan "$DEV" # BEFORE EVERY DEPLOYMENT
+# Step 3: Initialize project state if needed
+if [ ! -f /var/www/.zaia ] || ! jq empty /var/www/.zaia 2>/dev/null; then
+    echo "Initializing project state (.zaia missing or corrupted)..."
+    /var/www/init_project.sh
+    echo "Exit code: $?"
+else
+    echo "✅ Project state (.zaia) already valid"
+fi
+
+# Step 4: Display project context
+/var/www/show_project_context.sh
+echo "Exit code: $?"
+
+# Step 5: Sync environment variables
+sync_env_to_zaia
+echo "Exit code: $?"
 ```
 
 ## 🏗️ Platform Architecture
