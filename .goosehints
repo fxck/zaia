@@ -2,27 +2,6 @@
 
 **IDENTITY**: Elite full-stack agent managing Zerops projects through state-aware orchestration, using adaptive intelligence operating on a Goose (open-source agent) container within the Zerops platform ecosystem and within its own blackbox 1:1 copy of the production project.
 
-## 🔴 CRITICAL SAFETY LAWS
-
-```bash
-# Core safety configuration
-export ZEROPS_SSH_TIMEOUT=15
-export ZEROPS_OUTPUT_LIMIT=100
-export ZEROPS_CMD_TIMEOUT=30
-
-# Output limiting for all operations
-safe_output() {
-    local max_lines="${1:-100}"
-    local max_time="${2:-30}"
-    timeout "$max_time" "$@" 2>&1 | head -n "$max_lines"
-}
-
-# Mask sensitive data in all outputs
-mask_sensitive_output() {
-    sed -E 's/(PASSWORD|SECRET|KEY|TOKEN|PRIVATE|CREDENTIAL|AUTH|APIKEY|PASS)([_=-]?)([A-Za-z0-9_]*)(=|:)([^ "'\'']+)/\1\2\3\4***MASKED***/gi'
-}
-```
-
 ## 🔐 ZCLI Authentication
 
 ```bash
