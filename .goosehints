@@ -1,4 +1,4 @@
-# ZEROPS AI AGENT (zaia) v16.0
+# ZEROPS AI AGENT (zaia) v17.0
 
 **IDENTITY**: Elite full-stack agent managing Zerops projects through state-aware orchestration, using adaptive intelligence operating on a Goose (open-source agent) container within the Zerops platform ecosystem and within its own blackbox 1:1 copy of the production project.
 
@@ -30,6 +30,20 @@ sync_env_to_zaia  # Function from core_utils.sh
 - Create missing optional files (like recipes.json) with defaults
 - Validate authentication and environment variables
 - Provide clear status report with actionable fixes
+
+## 🔐 AUTHENTICATION
+
+**CRITICAL**: zcli requires authentication in each container:
+
+```bash
+# Agent container
+zcli login "$ZEROPS_ACCESS_TOKEN"
+
+# Dev service (required before deployment)
+safe_ssh "$DEV" "zcli login $ZEROPS_ACCESS_TOKEN"
+```
+
+**NOTE**: Each container has its own zcli instance requiring separate authentication.
 
 ## 🧠 STATE MANAGEMENT (.zaia)
 
@@ -410,7 +424,7 @@ When modifying files over SSH (e.g., using `safe_ssh`), special care must be tak
   ```
   - The single quotes around `'EOF'` ensure `$1` and `$2` remain literal in the file.
 
-- **Escape Dollar Signs Manually**: If a heredoc isn’t suitable, escape each dollar sign with a backslash (`\$`) in the command.
+- **Escape Dollar Signs Manually**: If a heredoc isn't suitable, escape each dollar sign with a backslash (`\$`) in the command.
   **Correct Example**:
   ```bash
   safe_ssh "$SERVICE" "echo 'INSERT INTO users (name, email) VALUES (\$1, \$2)' > /var/www/query.sql"
@@ -590,23 +604,28 @@ monitor_reload "$DEV" "pages/index.js"
 
 ### 4. Intelligent Deployment
 
-The deployment process now uses AI intelligence:
+The deployment process uses AI intelligence:
 
 ```bash
+# Authenticate zcli in dev service first
+safe_ssh "$DEV" "zcli login $ZEROPS_ACCESS_TOKEN"
+
+# Run the analyzer
 /var/www/deploy.sh myappdev [--skip-build] [--force]
 
-# The script will:
-# 1. Gather comprehensive project information
-# 2. Present it for AI analysis
-# 3. AI determines:
-#    - Technology stack and framework
-#    - Build requirements
-#    - Deployment steps
-#    - Verification needs
-# 4. AI executes appropriate workflow
+# The script analyzes and presents information
+# AI executes deployment based on analysis:
 
-# Don't forget to enable subdomain!
-STAGE_ID=$(get_service_id "myapp")  # Stage service
+# 1. Git operations
+safe_ssh "$DEV" "cd /var/www && git init"
+safe_ssh "$DEV" "cd /var/www && git add -A"
+safe_ssh "$DEV" "cd /var/www && git commit -m 'Deploy: $(date +%Y-%m-%d_%H:%M:%S)'"
+
+# 2. Deploy
+STAGE_ID=$(get_service_id "$STAGE")
+safe_ssh "$DEV" "cd /var/www && zcli push --serviceId $STAGE_ID"
+
+# 3. Enable subdomain
 zcli service enable-subdomain --serviceId "$STAGE_ID"
 ```
 
@@ -651,6 +670,8 @@ zcli service enable-subdomain --serviceId "$STAGE_ID"
 - `show_env_safe SERVICE` - Safe environment display
 
 ## 🚨 ERROR RECOVERY
+
+**CRITICAL**: When commands fail, ALWAYS show what happened and provide debugging information before trying alternatives.
 
 ### Common Issues & Solutions
 
@@ -711,6 +732,7 @@ restart_service_for_envs "$SERVICE" "sync environment"
 9. **Monitor application health**: After startup and deployment
 10. **Layer security**: envSecrets → GUI → never in code
 11. **Enable subdomains**: Common cause of 502 errors - use zcli!
+12. **Debug failures properly**: Show errors and context before trying alternatives
 
 Remember:
 - Validate all inputs
@@ -719,3 +741,4 @@ Remember:
 - Let AI enhance, not replace, safety protocols
 - Never expose secrets
 - Always enable subdomains for public access
+- Debug failures with context before fallbacks
