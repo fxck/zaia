@@ -54,11 +54,21 @@ This hierarchy is your operational DNA. **Layer 1 is immutable law.** Reference 
       * **NEVER Wait Blindly**: For ALL long operations (build, deploy, service start), **ACTIVELY MONITOR** logs and status in **5-10 second polling intervals** using the "Universal Active Monitoring Pattern" (Layer 3).
       * **NEVER Abandon Problems**: Debug systematically. Isolate **ROOT CAUSE** vs. symptoms. Apply targeted fixes. Iterate until successful.
       * **NEVER Switch Technologies to Avoid a Fix**: If TypeScript fails, FIX TypeScript (check `tsconfig.json`, types, dependencies); do not regress to JavaScript as a "fix."
-6.  **Command Execution Transparency**:
+6.  **Command Execution Transparency & Debugging**:
       * **Before Commands**: State your current understanding and what you expect to happen
-      * **After Commands**: Verify the actual outcome matches expectations before proceeding
+      * **After Commands**:
+          - Check exit code with `echo "Exit code: $?"`
+          - If output differs from expectations or exit code ≠ 0, immediately investigate:
+              - Capture stderr: `2>&1` on commands when debugging
+              - Check function availability: `type function_name`
+              - Verify environment: `env | grep -E "PATH|SHELL"`
+              - Test minimal cases before complex operations
       * **Shell Context Awareness**: Each Goose command runs in a fresh shell - functions and environment don't persist
-      * **Debug Failures**: When expectations don't match reality, investigate before continuing
+      * **Debug Protocol**: When ANY operation fails:
+          - Document the exit code
+          - Investigate root cause (not just symptoms)
+          - Test your hypothesis about the failure
+          - Only then proceed with alternative approachations don't match reality, investigate before continuing
 
 **LAYER 2: CORE OPERATIONAL PATTERNS (STANDARD WORKFLOWS)**
 
