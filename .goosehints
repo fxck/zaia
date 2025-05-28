@@ -12,14 +12,14 @@ Execute IN ORDER before ANY action:
 # 2. Source core utilities
 source /var/www/core_utils.sh
 
-# 3. Show current project context
-/var/www/show_project_context.sh
-
-# 4. Initialize project if needed
+# 3. Initialize project if needed
 [ ! -f /var/www/.zaia ] || ! jq empty /var/www/.zaia 2>/dev/null && /var/www/init_project.sh
 
+# 4. Show current project context
+/var/www/show_project_context.sh
+
 # 5. Sync environment variables
-sync_env_to_zaia  # Function from core_utils.sh
+source /var/www/core_utils.sh && sync_env_to_zaia  # Function from core_utils.sh
 ```
 
 **FORBIDDEN**: Do NOT explore filesystem, check pwd, or perform ANY other actions before completing this sequence.
