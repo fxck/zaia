@@ -28,22 +28,74 @@ PROJECT_ID=$(get_from_zaia '.project.id')  # ✅ CORRECT
 # NOT: PROJECT_ID=$(get_from_zaia '.projectId')  # ❌ WRONG - this key doesn't exist
 ```
 
-## ⚡ BUILD OPTIMIZATION
+## ⚡ Progressive Development Law
 
+**MANDATORY SEQUENCE - NEVER SKIP STEPS**
+```
+✓ Bootstrap Minimal → ✓ Deploy Config → ✓ Verify Env → ✓ Add Feature → ✓ Test → ✓ Deploy → ✓ Verify
+```
+
+Each phase MUST succeed before progression. Environment variables DON'T EXIST until deployed.
+
+**CRITICAL**: Always start minimal and build incrementally:
+- Create basic package.json before complex setups
+- Deploy minimal working version first
+- Add complexity one feature at a time
+- Test after each addition
+
+### Bootstrap Pattern (ALWAYS FOLLOW)
 ```bash
-# Cache expensive operations in prepareCommands
-prepareCommands:  # Runs once, cached
-  - npm install -g typescript
-  - pip install -r requirements.txt
-  - curl -fsSL https://code-server.dev/install.sh | sh -s -- -y
+# 1. ALWAYS create minimal files first
+safe_ssh "$SERVICE" "npm init -y && echo 'console.log(\"Bootstrap\")' > index.js"
 
-buildCommands:  # Runs every deploy, keep minimal
-  - npm ci
-  - npm run build
+# 2. Deploy minimal configuration
+safe_ssh "$SERVICE" "cat > zerops.yml << 'ZEROPS_EOF'
+zerops:
+  - setup: $SERVICE
+    build:
+      base: nodejs@22
+      buildCommands:
+        - npm install  # ALWAYS use 'npm install' for dev, never 'npm ci'
+    run:
+      base: nodejs@22
+      start: node index.js
+ZEROPS_EOF"
 
-# Build timeouts? Add memory:
-envVariables:
-  NODE_OPTIONS: "--max-old-space-size=4096"
+# 3. Deploy and VERIFY
+zcli push --serviceId "$SERVICE_ID"
+sleep 30
+# 4. Only AFTER verification, add complexity
+```
+
+## 📁 File Creation Discipline
+
+**CRITICAL RULE**: Different tools for different contexts:
+
+### LOCAL FILES (Agent Container)
+**ALWAYS use text_editor for local files - NEVER use shell heredocs**
+```bash
+# ✅ CORRECT for local files
+text_editor path: /tmp/services.yaml
+text_editor command: write
+text_editor file_text: |
+  services:
+    - hostname: app
+      type: nodejs@22
+
+# ❌ WRONG for local files - DON'T use heredocs locally
+cat > /tmp/file << 'EOF'  # This can cause parsing errors!
+```
+
+### REMOTE FILES (Service Containers)
+**Use heredocs via safe_ssh for remote files**
+```bash
+# ✅ CORRECT for remote files
+source /var/www/core_utils.sh && \
+  safe_ssh "$SERVICE" "cat > /var/www/config.js << 'CONFIG_EOF'
+const config = {
+  port: 3000
+};
+CONFIG_EOF"
 ```
 
 ## 🚀 MANDATORY INITIALIZATION SEQUENCE
@@ -74,21 +126,6 @@ Git/CLI → Build Container → S3 Artifact → Blue-Green Deploy
 
 **Key Insight**: Build containers cost nothing. Runtime containers are charged. Design accordingly.
 
-## ⚡ Progressive Development Law
-
-**MANDATORY SEQUENCE**
-```
-✓ Configure → ✓ Deploy Config → ✓ Develop → ✓ Test → ✓ Build → ✓ Deploy → ✓ Verify
-```
-
-Each phase MUST succeed before progression. Environment variables DON'T EXIST until deployed.
-
-**CRITICAL**: Always start minimal and build incrementally:
-- Create basic package.json before complex setups
-- Deploy minimal working version first
-- Add complexity one feature at a time
-- Test after each addition
-
 ## 🔧 Core Execution Pattern
 
 **FUNDAMENTAL**: All operations requiring core utilities must source and execute together:
@@ -111,6 +148,46 @@ source /var/www/core_utils.sh && \
 )
 ```
 
+## 🔍 Build Verification Pattern
+
+**MANDATORY**: Always verify build success before proceeding:
+
+```bash
+# Deploy and verify pattern
+(
+  source /var/www/core_utils.sh
+  SERVICE_ID=$(get_service_id "$SERVICE")
+
+  # Deploy
+  if safe_ssh "$SERVICE" "zcli push --serviceId '$SERVICE_ID'"; then
+    echo "✅ Push initiated"
+
+    # Wait and verify deployment succeeded
+    sleep 30
+
+    # Check if service is healthy
+    if zcli service describe --serviceId "$SERVICE_ID" | grep -q "running"; then
+      echo "✅ Service running"
+
+      # Verify environment variables if needed
+      if safe_ssh "$SERVICE" "[ -n \"\$DATABASE_URL\" ]"; then
+        echo "✅ Environment variables active"
+      else
+        echo "❌ Environment variables not resolved"
+        exit 1
+      fi
+    else
+      echo "❌ Service not running - check logs"
+      zcli service log --serviceId "$SERVICE_ID" --limit 50
+      exit 1
+    fi
+  else
+    echo "❌ Push failed"
+    exit 1
+  fi
+)
+```
+
 ## 👨‍💻 Developer Flow Patterns
 
 ### 1. Greenfield Project (Starting Fresh)
@@ -119,22 +196,23 @@ source /var/www/core_utils.sh && \
 # 1. Get best practices
 /var/www/get_recipe.sh nextjs
 
-# 2. Create infrastructure with mode for managed services
-cat > /tmp/services.yaml << 'SERVICES_EOF'
-#yamlPreprocessor=on
-services:
-  - hostname: db
-    type: postgresql@16
-    mode: NON_HA
-    priority: 100
-  - hostname: appdev
-    type: nodejs@22
-    startWithoutCode: true
-    envSecrets:
-      JWT_SECRET: <@generateRandomString(<32>)>
-  - hostname: app
-    type: nodejs@22
-SERVICES_EOF
+# 2. Create infrastructure with text_editor for local files
+text_editor path: /tmp/services.yaml
+text_editor command: write
+text_editor file_text: |
+  #yamlPreprocessor=on
+  services:
+    - hostname: db
+      type: postgresql@16
+      mode: NON_HA
+      priority: 100
+    - hostname: appdev
+      type: nodejs@22
+      startWithoutCode: true
+      envSecrets:
+        JWT_SECRET: <@generateRandomString(<32>)>
+    - hostname: app
+      type: nodejs@22
 
 # 3. Provision and configure
 (
@@ -158,7 +236,7 @@ source /var/www/core_utils.sh && sync_env_to_zaia
   safe_ssh "appdev" "cd /var/www && git init && git config user.email 'dev@zerops.io' && git config user.name 'ZAIA'"
 )
 
-# 7. Bootstrap BEFORE full configuration
+# 7. CRITICAL: Bootstrap BEFORE full configuration
 source /var/www/core_utils.sh && \
   safe_ssh "appdev" "cd /var/www && npm init -y" && \
   safe_ssh "appdev" "echo 'console.log(\"Bootstrap ready\");' > index.js"
@@ -170,12 +248,7 @@ zerops:
     build:
       base: nodejs@22
       buildCommands:
-        - npm ci
-        - npm run build
-      deployFiles:
-        - ./dist
-        - ./node_modules
-        - ./package.json
+        - npm install  # ALWAYS npm install for dev, never npm ci
     run:
       base: nodejs@22
       ports:
@@ -184,8 +257,7 @@ zerops:
       envVariables:
         NODE_ENV: production
         DATABASE_URL: \${db_connectionString}
-        JWT_SECRET: \${JWT_SECRET}
-      start: npm start
+      start: node index.js
       healthCheck:
         httpGet:
           port: 3000
@@ -195,11 +267,9 @@ zerops:
       base: nodejs@22
       os: ubuntu
       buildCommands:
-        - npm ci
+        - npm install  # ALWAYS npm install for dev, never npm ci
       deployFiles:
         - ./
-      cache:
-        - node_modules
     run:
       base: nodejs@22
       os: ubuntu
@@ -208,7 +278,6 @@ zerops:
       envVariables:
         NODE_ENV: development
         DATABASE_URL: \${db_connectionString}
-        JWT_SECRET: \${JWT_SECRET}
       ports:
         - port: 8080
           httpSupport: true
@@ -217,22 +286,33 @@ zerops:
       start: code-server --auth none --bind-addr 0.0.0.0:8080 /var/www
 ZEROPS_EOF"
 
-# 9. Deploy bootstrap configuration
+# 9. Deploy bootstrap configuration WITH VERIFICATION
 (
   source /var/www/core_utils.sh
   safe_ssh "appdev" "git add . && git commit -m 'Bootstrap configuration'"
   SERVICE_ID=$(get_service_id "appdev")
-  safe_ssh "appdev" "zcli login '$ZEROPS_ACCESS_TOKEN' && zcli push --serviceId '$SERVICE_ID'"
+
+  if safe_ssh "appdev" "zcli login '$ZEROPS_ACCESS_TOKEN' && zcli push --serviceId '$SERVICE_ID'"; then
+    echo "✅ Deployment initiated"
+    sleep 30
+
+    # Verify deployment succeeded
+    if ! safe_ssh "appdev" "[ -n \"\$DATABASE_URL\" ]"; then
+      echo "❌ Environment variables not active - deployment may have failed"
+      zcli service log --serviceId "$SERVICE_ID" --limit 50
+      exit 1
+    fi
+    echo "✅ Environment variables confirmed active"
+  else
+    echo "❌ Deployment failed"
+    exit 1
+  fi
 )
 
-# 10. Verify environment variables are active after deployment
-sleep 30 && source /var/www/core_utils.sh && \
-  safe_ssh "appdev" "[ -n \"\$DATABASE_URL\" ] && echo '✅ Env vars active' || exit 1"
-
-# 11. Develop incrementally - add Express first
+# 10. NOW incrementally add features - Express first
 source /var/www/core_utils.sh && \
   safe_ssh "appdev" "npm install express" && \
-  safe_ssh "appdev" "mkdir -p /var/www/tmp && cat > /var/www/tmp/index.js << 'EXPRESS_EOF'
+  safe_ssh "appdev" "mkdir -p /var/www/src && cat > /var/www/src/index.js << 'EXPRESS_EOF'
 const express = require('express');
 const app = express();
 const port = process.env.PORT || 3000;
@@ -243,26 +323,15 @@ app.get('/health', (req, res) => res.sendStatus(200));
 app.listen(port, '0.0.0.0', () => {
   console.log(\`Server running on port \${port}\`);
 });
-EXPRESS_EOF" && \
-  safe_ssh "appdev" "mv /var/www/tmp/index.js /var/www/src/"
+EXPRESS_EOF"
 
-# 12. Test basic version
+# 11. Test basic version BEFORE adding more complexity
 source /var/www/core_utils.sh && \
   safe_bg "appdev" "node src/index.js" "/var/www" "node src/index.js" && \
   sleep 5 && \
   check_application_health "appdev" 3000 "node"
 
-# 13. Deploy to production when ready
-/var/www/deploy.sh appdev
-
-# 14. Enable public access for production
-(
-  source /var/www/core_utils.sh
-  zcli service enable-subdomain --serviceId $(get_service_id app)
-  sync_env_to_zaia
-  PUBLIC_URL=$(get_from_zaia '.services.app.subdomain')
-  echo "Production app available at: https://$PUBLIC_URL"
-)
+# 12. Only after basic version works, add TypeScript, database, etc.
 ```
 
 ### 2. Existing Code, Not Initialized
@@ -283,7 +352,7 @@ zerops:
     build:
       base: nodejs@22
       buildCommands:
-        - npm ci
+        - npm install  # Use npm install for reliability
         - npm run build
       deployFiles:
         - ./dist
@@ -302,7 +371,7 @@ zerops:
       base: nodejs@22
       os: ubuntu
       buildCommands:
-        - npm ci
+        - npm install  # ALWAYS npm install for dev
       deployFiles:
         - ./
       cache:
@@ -320,19 +389,24 @@ zerops:
       start: code-server --auth none --bind-addr 0.0.0.0:8080 /var/www
 CONFIG_EOF"
 
-# 4. Initialize git if needed and deploy
+# 4. Initialize git if needed and deploy WITH VERIFICATION
 (
   source /var/www/core_utils.sh
   safe_ssh "$DEV" "cd /var/www && [ -d .git ] || git init"
   safe_ssh "$DEV" "git add zerops.yml && git commit -m 'Add Zerops config'"
   SERVICE_ID=$(get_service_id "$DEV")
-  safe_ssh "$DEV" "zcli login '$ZEROPS_ACCESS_TOKEN' && zcli push --serviceId '$SERVICE_ID'"
-)
 
-# 5. Verify and test
-sleep 30 && source /var/www/core_utils.sh && \
-  safe_ssh "$DEV" "npm install && npm run dev" && \
-  check_application_health "$DEV" 3000 "node"
+  if safe_ssh "$DEV" "zcli login '$ZEROPS_ACCESS_TOKEN' && zcli push --serviceId '$SERVICE_ID'"; then
+    sleep 30
+    # Verify deployment succeeded
+    safe_ssh "$DEV" "npm install && npm run dev" && \
+    check_application_health "$DEV" 3000 "node"
+  else
+    echo "❌ Deployment failed"
+    zcli service log --serviceId "$SERVICE_ID" --limit 50
+    exit 1
+  fi
+)
 ```
 
 ### 3. Existing Initialized Project
@@ -342,7 +416,7 @@ sleep 30 && source /var/www/core_utils.sh && \
 /var/www/show_project_context.sh
 source /var/www/core_utils.sh && safe_ssh "$DEV" "cd /var/www && git status"
 
-# 2. Make changes safely
+# 2. Make changes safely with temporary directory
 source /var/www/core_utils.sh && \
   safe_ssh "$DEV" "mkdir -p /var/www/tmp && cat > /var/www/tmp/new-feature.js << 'FEATURE_EOF'
 // Implementation
@@ -354,12 +428,21 @@ source /var/www/core_utils.sh && \
   safe_ssh "$DEV" "npm test" && \
   security_scan "$DEV"
 
-# 4. Commit and deploy
+# 4. Commit and deploy WITH VERIFICATION
 (
   source /var/www/core_utils.sh
   safe_ssh "$DEV" "git add . && git commit -m 'Add feature'"
   SERVICE_ID=$(get_service_id "$DEV")
-  safe_ssh "$DEV" "zcli login '$ZEROPS_ACCESS_TOKEN' && zcli push --serviceId '$SERVICE_ID'"
+
+  if safe_ssh "$DEV" "zcli login '$ZEROPS_ACCESS_TOKEN' && zcli push --serviceId '$SERVICE_ID'"; then
+    echo "✅ Push succeeded"
+    sleep 30
+    check_application_health "$DEV" 3000 "node"
+  else
+    echo "❌ Push failed - checking logs"
+    zcli service log --serviceId "$SERVICE_ID" --limit 50
+    exit 1
+  fi
 )
 ```
 
@@ -368,7 +451,14 @@ source /var/www/core_utils.sh && \
 **MANDATORY SEQUENCE AFTER SERVICE IMPORT:**
 
 ```bash
-# 1. Import services
+# 1. Import services (using text_editor for local files)
+text_editor path: /tmp/services.yaml
+text_editor command: write
+text_editor file_text: |
+  services:
+    - hostname: myapp
+      type: nodejs@22
+
 zcli project service-import /tmp/services.yaml --projectId "$PROJECT_ID"
 
 # 2. CRITICAL: Wait for service creation
@@ -392,32 +482,47 @@ source /var/www/core_utils.sh && sync_env_to_zaia
 - `init_project.sh` queries the API and rebuilds the complete state
 - Only after re-init can we access service IDs and configurations
 
+## 🔧 Build Optimization Patterns
+
+### Cache Configuration
+```yaml
+# In zerops.yml - cache expensive operations
+prepareCommands:  # Runs once, cached
+  - npm install -g typescript
+  - pip install -r requirements.txt
+  - curl -fsSL https://code-server.dev/install.sh | sh -s -- -y
+
+buildCommands:  # Runs every deploy, keep minimal
+  - npm install  # Use npm install for dev environments
+  - npm run build
+
+# Build timeouts? Add memory:
+envVariables:
+  NODE_OPTIONS: "--max-old-space-size=4096"
+```
+
 ## 🔧 SAFE FILE CREATION PATTERNS
 
-**ALWAYS use unique EOF markers to prevent conflicts:**
-
+**LOCAL FILES - Use text_editor:**
 ```bash
-# ✅ CORRECT - Unique EOF markers
-cat > /tmp/services.yaml << 'SERVICES_EOF'
-services:
-  - hostname: app
-    type: nodejs@22
-SERVICES_EOF
+# ✅ CORRECT - Use text_editor for local files
+text_editor path: /tmp/config.yaml
+text_editor command: write
+text_editor file_text: |
+  services:
+    - hostname: app
+      type: nodejs@22
 
-cat > /tmp/config.js << 'CONFIG_EOF'
-const config = {
-  port: 3000
-};
-CONFIG_EOF
+# Verify the file
+yq e '.' /tmp/config.yaml
 
-# ❌ WRONG - Generic EOF can cause nesting issues
-cat > /tmp/file << 'EOF'
+# ❌ WRONG - Don't use heredocs for local files
+cat > /tmp/file << 'EOF'  # Can cause parsing errors
 content
 EOF
 ```
 
-**For remote file creation with SSH:**
-
+**REMOTE FILES - Use safe_ssh with heredocs:**
 ```bash
 # ✅ CORRECT - Safe remote file creation
 source /var/www/core_utils.sh && \
@@ -442,7 +547,8 @@ zerops:
     build:
       base: <tech>@<version>
       os: ubuntu              # Required for dev services
-      buildCommands: []       # Minimal for dev, full for prod
+      buildCommands:           # ALWAYS use 'npm install' for dev
+        - npm install         # Never 'npm ci' for dev services
       deployFiles: []         # ./ for dev, specific for prod
       cache:                  # Sequence format
         - node_modules
@@ -492,11 +598,20 @@ services:
 (
   source /var/www/core_utils.sh
   SERVICE_ID=$(get_service_id "$DEV")
-  safe_ssh "$DEV" "zcli login '$ZEROPS_ACCESS_TOKEN' && zcli push --serviceId '$SERVICE_ID'"
-)
 
-# NOW variables exist
-source /var/www/core_utils.sh && safe_ssh "$DEV" "echo \$DATABASE_URL"
+  # Deploy and verify
+  if safe_ssh "$DEV" "zcli login '$ZEROPS_ACCESS_TOKEN' && zcli push --serviceId '$SERVICE_ID'"; then
+    sleep 30
+    # NOW verify variables exist
+    if safe_ssh "$DEV" "[ -n \"\$DATABASE_URL\" ]"; then
+      echo "✅ Environment variables active"
+    else
+      echo "❌ Environment variables not active - check deployment"
+      zcli service log --serviceId "$SERVICE_ID" --limit 50
+      exit 1
+    fi
+  fi
+)
 ```
 
 ### Variable Types
@@ -593,6 +708,7 @@ source /var/www/core_utils.sh && PUBLIC_URL=$(get_from_zaia '.services["myapp"].
 | **Port already used** | Old process | `source /var/www/core_utils.sh && safe_ssh "$DEV" "fuser -k 3000/tcp"` | `ss -tlnp \| grep 3000` |
 | **Migration runs twice** | No execOnce | Use `zsc execOnce key_${appVersionId}` | Check database |
 | **Services not found** | Missing re-init | `/var/www/init_project.sh` after import | `source /var/www/core_utils.sh && get_service_id "service"` |
+| **Build failed** | Various | Check logs immediately | `zcli service log --serviceId "$ID" --limit 50` |
 
 ## ✅ Verification Gates
 
@@ -609,6 +725,24 @@ source /var/www/core_utils.sh && \
 # Configuration Deployment Gate
 source /var/www/core_utils.sh && \
   safe_ssh "$SERVICE" "[ -n \"\$DATABASE_URL\" ] && echo '✅ Env vars active' || exit 1"
+
+# Build Success Gate
+(
+  source /var/www/core_utils.sh
+  SERVICE_ID=$(get_service_id "$SERVICE")
+
+  if zcli push --serviceId "$SERVICE_ID"; then
+    sleep 30
+    if ! zcli service describe --serviceId "$SERVICE_ID" | grep -q "running"; then
+      echo "❌ Service not running after deployment"
+      zcli service log --serviceId "$SERVICE_ID" --limit 50
+      exit 1
+    fi
+  else
+    echo "❌ Push command failed"
+    exit 1
+  fi
+)
 
 # Process Health Gate
 source /var/www/core_utils.sh && check_application_health "$SERVICE" 3000 "node"
@@ -645,10 +779,12 @@ ensure_bootstrap_files() {
 
 ### File Creation with Verification
 ```bash
-# Local files
-cat > /tmp/config.yaml << 'YAML_CONFIG_EOF'
-content
-YAML_CONFIG_EOF
+# Local files - ALWAYS use text_editor
+text_editor path: /tmp/config.yaml
+text_editor command: write
+text_editor file_text: |
+  content here
+
 [ -s /tmp/config.yaml ] && yq e '.' /tmp/config.yaml
 
 # Remote files with safety
@@ -713,8 +849,16 @@ source /var/www/core_utils.sh && monitor_reload "myapp" "package.json updated"
 
 ### Complex Operations
 ```bash
-# Service creation and configuration
+# Service creation and configuration - ALWAYS use text_editor for local files
 (
+  # Create service definition locally
+  text_editor path: /tmp/services.yaml
+  text_editor command: write
+  text_editor file_text: |
+    services:
+      - hostname: newservice
+        type: nodejs@22
+
   source /var/www/core_utils.sh
   PROJECT_ID=$(get_from_zaia '.project.id')
   zcli project service-import /tmp/services.yaml --projectId "$PROJECT_ID"
@@ -724,25 +868,43 @@ source /var/www/core_utils.sh && monitor_reload "myapp" "package.json updated"
   apply_workaround "newservice"
 )
 
-# Full deployment workflow
+# Full deployment workflow with verification
 (
   source /var/www/core_utils.sh
 
+  # Build and prepare
   safe_ssh "appdev" "npm install && npm run build"
   safe_ssh "appdev" "git add . && git commit -m 'Build ready'"
 
   SERVICE_ID=$(get_service_id "app")
   safe_ssh "appdev" "zcli login '$ZEROPS_ACCESS_TOKEN'"
-  safe_ssh "appdev" "zcli push --serviceId '$SERVICE_ID'"
 
-  sleep 30
-  check_application_health "app" 3000 "node"
+  # Deploy with verification
+  if safe_ssh "appdev" "zcli push --serviceId '$SERVICE_ID'"; then
+    echo "✅ Push succeeded"
+    sleep 30
 
-  if [ $? -eq 0 ]; then
-    zcli service enable-subdomain --serviceId "$SERVICE_ID"
-    sync_env_to_zaia
-    PUBLIC_URL=$(get_from_zaia '.services.app.subdomain')
-    echo "✅ App deployed: https://$PUBLIC_URL"
+    # Verify service is running
+    if zcli service describe --serviceId "$SERVICE_ID" | grep -q "running"; then
+      check_application_health "app" 3000 "node"
+
+      if [ $? -eq 0 ]; then
+        zcli service enable-subdomain --serviceId "$SERVICE_ID"
+        sync_env_to_zaia
+        PUBLIC_URL=$(get_from_zaia '.services.app.subdomain')
+        echo "✅ App deployed: https://$PUBLIC_URL"
+      else
+        echo "❌ Health check failed"
+        exit 1
+      fi
+    else
+      echo "❌ Service not running"
+      zcli service log --serviceId "$SERVICE_ID" --limit 50
+      exit 1
+    fi
+  else
+    echo "❌ Push failed"
+    exit 1
   fi
 )
 ```
@@ -796,7 +958,9 @@ source /var/www/core_utils.sh && diagnose_issue "$SERVICE" --smart
 - [ ] Bootstrap strategy followed
 - [ ] Progressive development enforced
 - [ ] **Re-init after service import**
-- [ ] **Unique EOF markers used**
+- [ ] **Used text_editor for local files**
+- [ ] **Verified build success before proceeding**
+- [ ] **Used npm install (not npm ci) for dev services**
 
 ## 🎯 Core Mantras
 
@@ -804,13 +968,15 @@ source /var/www/core_utils.sh && diagnose_issue "$SERVICE" --smart
 2. **"Bootstrap before configure"** - Create basic files before complex configs
 3. **"Deploy config before code"** - Env vars must exist
 4. **"Start minimal, build up"** - Never jump to complex implementations
-5. **"Verify everything"** - Files, processes, health
+5. **"Verify everything"** - Files, processes, health, builds
 6. **"Recipes are canonical"** - Match exactly (including mode)
 7. **"Think like a developer"** - Same flows, automated
 8. **"Health checks prevent disasters"** - Always configure
 9. **"Security scan or don't deploy"** - No exceptions
 10. **"Gates ensure success"** - Every phase verified
 11. **"Re-init after import"** - Services won't exist without it
-12. **"Unique EOF markers"** - Prevent heredoc conflicts
+12. **"text_editor for local files"** - Prevent heredoc conflicts
+13. **"Trust but verify builds"** - Always check deployment succeeded
+14. **"npm install for dev"** - Never npm ci for development services
 
-Remember: You're automating what developers do manually. Every pattern prevents real failures. Every verification gate catches issues early. Dev services are persistent environments with code-server, not build/deploy targets. Always start with the simplest working version and build complexity incrementally. **ALWAYS re-initialize project state after service import** - services won't be discoverable otherwise.
+Remember: You're automating what developers do manually. Every pattern prevents real failures. Every verification gate catches issues early. Dev services are persistent environments with code-server, not build/deploy targets. Always start with the simplest working version and build complexity incrementally. **ALWAYS re-initialize project state after service import** - services won't be discoverable otherwise. **ALWAYS use text_editor for local files** to prevent parsing errors. **ALWAYS verify build success** before assuming environment variables are available.
