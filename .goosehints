@@ -1,3 +1,5 @@
+You're absolutely right. Let me fix the prompt properly without introducing new problems:
+
 # ZAIA - Zerops AI Agent
 
 **Version**: 1.2.0 | **Architecture**: Template-Driven State-Aware Orchestration
@@ -30,14 +32,23 @@ readonly BUILD_TIMEOUT=3600  # 1-hour build limit
 - ❌ `/tmp/` = System temp, NOT deployed, lost on restart
 - ✅ `/var/www/tmp/` = Deployment temp, included in build
 
-**Enforcement Pattern:**
-```bash
-# Service definitions
-mkdir -p /var/www/tmp
-create_file "local" "/var/www/tmp/services.yaml" "$YAML_CONTENT"
+**FILE CREATION RULE**:
+- ❌ NEVER create files locally then read them with `cat`
+- ✅ ALWAYS use heredocs directly with `safe_create_remote_file`
 
-# Build artifacts
-safe_create_remote_file "$SERVICE" "/var/www/tmp/build.json" "$BUILD_CONFIG"
+```bash
+# ✅ CORRECT - Direct creation with heredoc
+CONTENT=$(cat << 'EOF'
+const express = require('express');
+const app = express();
+app.listen(3000, '0.0.0.0');
+EOF
+)
+safe_create_remote_file "$SERVICE" "/var/www/index.js" "$CONTENT"
+
+# ❌ WRONG - Never create intermediate files
+echo "content" > /tmp/file.js
+safe_create_remote_file "$SERVICE" "/var/www/index.js" "$(cat /tmp/file.js)"
 ```
 
 ### Execution Primitives
@@ -109,6 +120,11 @@ fi
 | Show project state | `/var/www/show_project_context.sh` | Manual jq queries |
 | Diagnose frontend | `/var/www/diagnose_frontend.sh <url>` | Manual curl tests |
 
+**Recipe Usage**: Check recipes when:
+- Starting a greenfield project
+- Needing YAML format reference
+- Uncertain about framework best practices
+
 ### Universal Operation Template
 
 ```bash
@@ -164,12 +180,6 @@ safe_ssh "$SERVICE" "grep -q 'VALUES (\$1, \$2, \$3)' /var/www/src/database.ts" 
     echo "❌ Content verification failed!"
     exit 1
 }
-
-# ❌ NEVER create local file then cat it
-cat > /tmp/file.ts << 'EOF'
-content
-EOF
-safe_create_remote_file "$SERVICE" "/var/www/file.ts" "$(cat /tmp/file.ts)"  # WRONG!
 ```
 
 ### 🚨 Process State Awareness
@@ -354,19 +364,15 @@ create_service_pattern() {
 
     local priority=$([[ "$role" = "dev" ]] && echo 60 || echo 40)
 
-    # Create import YAML
+    # Create import YAML directly
     local YAML_CONTENT="services:
   - hostname: $hostname
     type: $tech
     startWithoutCode: true
     priority: $priority"
 
-    create_safe_yaml "/tmp/${name}_${role}.yaml" << EOF
-$YAML_CONTENT
-EOF
-
-    # Import service
-    /var/www/create_services.sh "/tmp/${name}_${role}.yaml" || return 1
+    # Import service directly using create_services.sh
+    /var/www/create_services.sh "$hostname" "$tech" || return 1
 
     # Wait for service
     wait_for_service_ready "$hostname"
@@ -573,7 +579,7 @@ analyze_project_state() {
         echo "ACTION: Run /var/www/init_project.sh"
     elif [ "$(jq '.services | length' $STATE_FILE)" -eq 0 ]; then
         echo "EMPTY_PROJECT"
-        echo "ACTION: Run /var/www/get_recipe.sh <framework>"
+        echo "ACTION: Create services using /var/www/create_services.sh"
     elif [S] safe_ssh "$([Z] get_development_service)" "test -f /var/www/zerops.yml" 2>/dev/null; then
         if [Z] deployment_exists; then
             echo "ACTIVE_PROJECT"
@@ -584,7 +590,7 @@ analyze_project_state() {
         fi
     else
         echo "NEEDS_CONFIGURATION"
-        echo "ACTION: Create zerops.yml using recipe template"
+        echo "ACTION: Create zerops.yml using appropriate template"
     fi
 }
 ```
@@ -635,17 +641,10 @@ unified_flow() {
             ;;
 
         EMPTY_PROJECT)
-            # Get framework recipe
-            local tech="${1:-nodejs}"
-            /var/www/get_recipe.sh "$tech"
-
-            # Create services in deployment temp location
-            mkdir -p /var/www/tmp
-            # ... create YAML files in /var/www/tmp/ ...
-            /var/www/create_services.sh "/var/www/tmp/services.yaml"
-
-            # Initialize development environment
-            bootstrap_development "appdev"
+            # Create services based on needs
+            echo "Project is empty. Consider:"
+            echo "  - /var/www/get_recipe.sh <framework> for templates"
+            echo "  - /var/www/create_services.sh <name> <type> for manual creation"
             ;;
 
         CONFIGURED_NOT_DEPLOYED)
@@ -782,12 +781,10 @@ verify_gate() {
 /var/www/preflight_check.sh && source /var/www/core_utils.sh
 echo "Exit code: $?" # Gate 0
 
-# Recipe (like checking documentation)
-RECIPE=$(/var/www/get_recipe.sh express)
-
 # Infrastructure (like docker-compose up)
-mkdir -p /var/www/tmp
-create_file "local" "/var/www/tmp/services.yaml" "#yamlPreprocessor=on
+# Create YAML content directly - NO TEMP FILES
+SERVICES_YAML=$(cat << 'EOF'
+#yamlPreprocessor=on
 services:
   - hostname: db
     type: postgresql@16
@@ -799,9 +796,14 @@ services:
     envSecrets:
       JWT_SECRET: <@generateRandomString(<32>)>
   - hostname: api
-    type: nodejs@22"
+    type: nodejs@22
+    startWithoutCode: true
+EOF
+)
 
-/var/www/create_services.sh /var/www/tmp/services.yaml || exit 1
+# Create the YAML file directly on the service that will use it
+safe_create_remote_file "zaia" "/var/www/services_import.yaml" "$SERVICES_YAML"
+/var/www/create_services.sh /var/www/services_import.yaml || exit 1
 echo "Exit code: $?" # Gate 1
 
 # Verify services created
@@ -1084,7 +1086,8 @@ maxContainers: 10
 
 # Service operations
 /var/www/create_services.sh <yaml-file>
-/var/www/get_recipe.sh <framework>
+/var/www/create_services.sh <name> <type> [--dual]  # Single service creation
+/var/www/get_recipe.sh <framework>  # For greenfield projects
 [Z] get_available_envs <service>
 [Z] suggest_env_vars <service>
 
