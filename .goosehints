@@ -63,6 +63,21 @@ zaia_exec() {
 - **Health Checks**: 5-minute window
 - **SSH Availability**: Runtime services only (not managed services)
 
+### Command Execution Transparency
+
+```bash
+# Before EVERY command, state expectation
+echo "Installing dependencies - expecting npm to install all packages with exit code 0"
+[Z] safe_ssh "$SERVICE" "cd /var/www && npm install"
+echo "Exit code: $?"
+
+# If exit code ≠ 0, investigate immediately
+if [ $? -ne 0 ]; then
+    echo "❌ Unexpected failure - investigating..."
+    [Z] diagnose_issue "$SERVICE" --smart
+fi
+```
+
 ## 🔧 Operational Patterns
 
 ### Universal Operation Template
@@ -209,6 +224,21 @@ intelligent_recovery() {
 }
 ```
 
+## 🚨 Rapid Error Recovery Matrix
+
+| Error | Cause | Fix | Verification |
+|-------|-------|-----|--------------|
+| **Cannot find module** | Missing dependency | `[Z] safe_ssh "$DEV" "npm install missing-module"` | `npm ls missing-module` |
+| **502 Bad Gateway** | No subdomain/binding | `zcli service enable-subdomain` + check `0.0.0.0` | `[Z] diagnose_502_enhanced` |
+| **Env var undefined** | Not deployed | Deploy zerops.yml first | `[Z] get_available_envs "$SERVICE"` |
+| **Build timeout** | >1hr limit | Split into prepareCommands | Check build logs |
+| **Type/TS errors** | Missing types | `npm install --save-dev @types/node typescript` | `npx tsc --noEmit` |
+| **YAML error** | Wrong structure | Match recipe exactly | `yq e '.' file.yaml` |
+| **Empty /var/www** | Missing deployFiles | Add all runtime files | `ls -la /var/www` |
+| **CORS errors** | Missing headers | Add to backend API | Browser network tab |
+| **Port already used** | Old process | `[Z] safe_ssh "$DEV" "fuser -k 3000/tcp"` | `ss -tlnp \| grep 3000` |
+| **Migration runs twice** | No execOnce | Use `zsc execOnce key_${appVersionId}` | Check database |
+
 ## 🛠️ Available Capabilities from core_utils.sh
 
 After sourcing `/var/www/core_utils.sh`, you have access to these functions:
@@ -271,6 +301,7 @@ type function_name
 
 # Check function parameters
 declare -f function_name
+```
 
 ### Usage Examples
 
@@ -370,16 +401,21 @@ The `.zaia` file is your single source of truth for project state. Query it with
 analyze_project_state() {
     if [ ! -f "$STATE_FILE" ]; then
         echo "UNINITIALIZED"
+        echo "ACTION: Run /var/www/init_project.sh"
     elif [ "$(jq '.services | length' $STATE_FILE)" -eq 0 ]; then
         echo "EMPTY_PROJECT"
+        echo "ACTION: Run /var/www/get_recipe.sh <framework>"
     elif [S] safe_ssh "$([Z] get_development_service)" "test -f /var/www/zerops.yml" 2>/dev/null; then
         if [Z] deployment_exists; then
             echo "ACTIVE_PROJECT"
+            echo "ACTION: Make changes and run /var/www/deploy.sh"
         else
             echo "CONFIGURED_NOT_DEPLOYED"
+            echo "ACTION: Run /var/www/deploy.sh <dev-service>"
         fi
     else
         echo "NEEDS_CONFIGURATION"
+        echo "ACTION: Create zerops.yml using recipe template"
     fi
 }
 ```
@@ -599,6 +635,151 @@ ZEROPS_EOF"
 }
 ```
 
+## 🚀 Complete Workflow Example (With All Gates)
+
+```bash
+# Initialize (like opening terminal)
+/var/www/preflight_check.sh && source /var/www/core_utils.sh
+echo "Exit code: $?" # Gate 0
+
+# Recipe (like checking documentation)
+RECIPE=$(/var/www/get_recipe.sh express)
+
+# Infrastructure (like docker-compose up)
+create_file "local" "/tmp/services.yaml" "#yamlPreprocessor=on
+services:
+  - hostname: db
+    type: postgresql@16
+    mode: NON_HA
+    priority: 100
+  - hostname: apidev
+    type: nodejs@22
+    startWithoutCode: true
+    envSecrets:
+      JWT_SECRET: <@generateRandomString(<32>)>
+  - hostname: api
+    type: nodejs@22"
+
+[Z] zcli project service-import /tmp/services.yaml --projectId "$([Z] get_from_zaia '.project.id')"
+echo "Exit code: $?" # Gate 1
+sleep 25 && /var/www/init_project.sh  # CRITICAL: Re-init after import
+
+# Verify services created
+[Z] verify_service_exists 'apidev' || exit 1 # Gate 2
+
+# Fix platform quirks
+[Z] apply_workaround "apidev" && [Z] apply_workaround "api"
+echo "Exit code: $?" # Gate 3
+
+# Git setup (like any project)
+[S] safe_ssh "apidev" "cd /var/www && git init && git config user.email 'dev@zerops.io'"
+echo "Exit code: $?" # Gate 4
+
+# Configure FIRST (Progressive Development Law)
+[S] safe_ssh "apidev" "cat > /var/www/zerops.yml << 'ZEROPS_EOF'
+zerops:
+  - setup: apidev
+    build:
+      base: nodejs@22
+      buildCommands:
+        - npm install
+        - npm run build
+      cache:
+        - node_modules
+      deployFiles:
+        - ./dist
+        - ./node_modules
+        - ./package.json
+    run:
+      base: nodejs@22
+      start: npm run dev
+      ports:
+        - port: 3000
+          httpSupport: true
+      envVariables:
+        NODE_ENV: development
+        DATABASE_URL: \${db_connectionString}
+        JWT_SECRET: \${JWT_SECRET}
+  - setup: api
+    build:
+      base: nodejs@22
+      buildCommands:
+        - npm install --production
+        - npm run build
+      cache:
+        - node_modules
+      deployFiles:
+        - ./dist
+        - ./node_modules
+        - ./package.json
+    run:
+      base: nodejs@22
+      start: npm start
+      ports:
+        - port: 3000
+          httpSupport: true
+      healthCheck:
+        httpGet:
+          port: 3000
+          path: /health
+      envVariables:
+        NODE_ENV: production
+        DATABASE_URL: \${db_connectionString}
+        JWT_SECRET: \${JWT_SECRET}
+ZEROPS_EOF"
+
+# Verify file created
+[S] safe_ssh "apidev" "[ -s /var/www/zerops.yml ] && yq e '.' /var/www/zerops.yml"
+echo "Exit code: $?" # Gate 5
+
+# Deploy config (activates env vars)
+[S] safe_ssh "apidev" "git add . && git commit -m 'Zerops config'"
+[S] safe_ssh "apidev" "zcli login '$ZEROPS_ACCESS_TOKEN'"
+SERVICE_ID=$([Z] get_service_id "apidev")
+[S] safe_ssh "apidev" "zcli push --serviceId '$SERVICE_ID'"
+echo "Exit code: $?" # Gate 6
+sleep 30
+
+# Verify environment variables active
+[S] safe_ssh "apidev" "[ -n \"\$DATABASE_URL\" ] || exit 1"
+echo "Exit code: $?" # Gate 7
+
+# NOW develop (environment ready)
+[S] safe_ssh "apidev" "npm init -y && npm install express"
+[S] safe_ssh "apidev" "cat > /var/www/index.js << 'EOF'
+const express = require('express');
+const app = express();
+app.get('/', (req, res) => res.json({status: 'ok'}));
+app.get('/health', (req, res) => res.sendStatus(200));
+app.listen(process.env.PORT || 3000, '0.0.0.0');
+EOF"
+
+# Test locally
+[Z] safe_bg "apidev" "node index.js" "/var/www" "node"
+[Z] check_application_health "apidev" 3000 "node"
+echo "Exit code: $?" # Gate 8
+
+# Security scan
+[Z] security_scan "apidev" | grep -q "CLEAN"
+echo "Exit code: $?" # Gate 9
+
+# Deploy to production
+[S] safe_ssh "apidev" "git add . && git commit -m 'Initial app'"
+PROD_SERVICE_ID=$([Z] get_service_id "api")
+[S] safe_ssh "apidev" "zcli push --serviceId '$PROD_SERVICE_ID'"
+echo "Exit code: $?" # Gate 10
+
+# Enable public access
+zcli service enable-subdomain --serviceId "$PROD_SERVICE_ID"
+echo "Exit code: $?" # Gate 11
+sleep 10 && [Z] sync_env_to_zaia
+
+# Final verification
+PUBLIC_URL="https://$([Z] get_from_zaia '.services.api.subdomain')"
+curl -s "$PUBLIC_URL/health" | grep -q "OK"
+echo "Exit code: $?" # Gate 12 - PRODUCTION READY!
+```
+
 ## 📊 Reference Section
 
 ### Authentication Pattern
@@ -700,6 +881,33 @@ services:
     maxContainers: 10
 ```
 
+### Production Configuration Patterns
+
+```yaml
+# Health checks (prevent bad deploys)
+run:
+  healthCheck:
+    httpGet:
+      port: 3000
+      path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+# Resource recommendations by service type
+verticalAutoscaling:
+  minCpu: 1      # Dev: 1, Prod: 2, Build: 4
+  maxCpu: 10     # Dev: 2, Prod: 5, Build: 8
+  minRam: 512    # Dev: 512MB, Prod: 2GB, Build: 4GB
+  maxRam: 8192   # Dev: 2GB, Prod: 4GB, Build: 8GB
+
+# High Availability for production
+mode: HA
+minContainers: 2
+maxContainers: 10
+```
+
 ### Quick Command Reference
 ```bash
 # Project management
@@ -756,17 +964,17 @@ production_readiness_check() {
 }
 ```
 
-## 🎯 Core Patterns Summary
+## 🎯 Core Mantras
 
-1. **Always verify state** before operations
-2. **Use templates** for language-agnostic operations
-3. **Progressive deployment** - start minimal, add incrementally
-4. **Environment variables** require deployment to activate
-5. **Re-initialize state** after service imports
-6. **Platform workarounds** for StartWithoutCode services
-7. **Atomic file operations** with temp files
-8. **Health verification** after every deployment
-9. **Git state** must be clean before deployment
-10. **Technology detection** drives configuration generation
+1. **"Deploy config before code"** - Env vars must exist
+2. **"Exit codes are truth"** - Check after every command
+3. **"Recipes are canonical"** - Match exactly
+4. **"Verify everything"** - Files, processes, health
+5. **"Think like a developer"** - Same flows, automated
+6. **"Single quotes save SQL lives"** - 'EOF' for heredocs
+7. **"Prepare heavy, build light"** - Cache dependencies
+8. **"Health checks prevent disasters"** - Always configure
+9. **"Security scan or don't deploy"** - No exceptions
+10. **"Gates ensure success"** - Every phase verified
 
 Remember: This is a template-driven system. Language examples (Node.js, Python, etc.) are patterns to be adapted, not hardcoded solutions. Every operation should be verifiable, every deployment progressive, and every failure recoverable.
