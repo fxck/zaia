@@ -6,6 +6,143 @@ export ZEROPS_SSH_TIMEOUT=15
 export ZEROPS_OUTPUT_LIMIT=100
 export ZEROPS_CMD_TIMEOUT=30
 
+# Enhanced execution wrapper
+zaia_exec() {
+    source /var/www/core_utils.sh 2>/dev/null || { echo "❌ Core utils unavailable"; exit 1; }
+    "$@"
+}
+
+# Verification helper
+verify_check() {
+    local description="$1"
+    local command="$2"
+
+    echo -n "  Checking: $description... "
+    if eval "$command" >/dev/null 2>&1; then
+        echo "✅"
+        return 0
+    else
+        echo "❌"
+        return 1
+    fi
+}
+
+# Get development service from state
+get_development_service() {
+    local dev_services=$(get_from_zaia '.services | to_entries[] | select(.value.role == "development") | .key' | head -1)
+    if [ -z "$dev_services" ]; then
+        echo "❌ No development service found" >&2
+        return 1
+    fi
+    echo "$dev_services"
+}
+
+# Check if deployment exists for a service
+deployment_exists() {
+    local service="${1:-$(get_development_service)}"
+    local stage="${service%dev}"
+
+    local stage_id=$(get_from_zaia ".services[\"$stage\"].id // \"\"")
+    [ -n "$stage_id" ] && [ "$stage_id" != "pending" ]
+}
+
+# Ensure service has subdomain
+ensure_subdomain() {
+    local service="$1"
+    local service_id=$(get_service_id "$service")
+
+    if ! zcli service describe --serviceId "$service_id" | grep -q "subdomain"; then
+        echo "🌐 Enabling subdomain for $service..."
+        zcli service enable-subdomain --serviceId "$service_id"
+        sleep 5
+        sync_env_to_zaia
+    fi
+}
+
+# Verify service exists in state
+verify_service_exists() {
+    local service="$1"
+    get_from_zaia ".services[\"$service\"]" >/dev/null 2>&1
+}
+
+# Verify git state is clean
+verify_git_state() {
+    local service="$1"
+
+    if ! safe_ssh "$service" "cd /var/www && [ -d .git ]" 2>/dev/null; then
+        echo "⚠️ Git not initialized"
+        return 1
+    fi
+
+    local changes=$(safe_ssh "$service" "cd /var/www && git status --porcelain | wc -l" 1 5)
+    if [ "$changes" -gt 0 ]; then
+        echo "⚠️ Uncommitted changes detected"
+        safe_ssh "$service" "cd /var/www && git status --short" 20 5
+        return 1
+    fi
+
+    return 0
+}
+
+# Verify build succeeded
+verify_build_success() {
+    local service="$1"
+
+    # Check for common build artifacts based on technology
+    if safe_ssh "$service" "test -f /var/www/package.json" 2>/dev/null; then
+        # JavaScript project
+        if safe_ssh "$service" "grep -q '\"build\"' /var/www/package.json" 2>/dev/null; then
+            if ! safe_ssh "$service" "test -d /var/www/dist -o -d /var/www/build -o -d /var/www/.next" 2>/dev/null; then
+                echo "⚠️ No build artifacts found"
+                return 1
+            fi
+        fi
+    fi
+
+    return 0
+}
+
+# Check deployment status
+check_deployment_status() {
+    local service="$1"
+    local service_id=$(get_service_id "$service")
+
+    if ! zcli service describe --serviceId "$service_id" | grep -q "running"; then
+        echo "❌ Service not running"
+        zcli service log --serviceId "$service_id" --limit 50
+        return 1
+    fi
+
+    return 0
+}
+
+# Verify service health
+verify_health() {
+    local service="$1"
+    local port="${2:-3000}"
+
+    check_application_health "$service" "$port"
+}
+
+# Generate service YAML from template
+generate_service_yaml() {
+    local name="$1"
+    local type="$2"
+    local options="$3"
+
+    local yaml="services:
+  - hostname: $name
+    type: $type"
+
+    # Add options if provided
+    if [ -n "$options" ]; then
+        yaml="$yaml
+    $options"
+    fi
+
+    echo "$yaml"
+}
+
 # Output limiting wrapper
 safe_output() {
     local max_lines="${1:-100}"
@@ -246,37 +383,20 @@ suggest_env_vars() {
         esac
     done
 
-    # Framework-specific suggestions
-    local service_type=$(get_from_zaia ".services[\"$service\"].type // \"\"" 2>/dev/null)
+    # Technology-agnostic suggestions
     echo ""
-    echo "🎯 Framework-specific suggestions for $service_type:"
-
-    case "$service_type" in
-        nodejs*)
-            echo "  NODE_ENV: production"
-            echo "  PORT: 3000"
-            echo "  JWT_SECRET: <use envSecrets>"
-            echo "  SESSION_SECRET: <use envSecrets>"
-            ;;
-        python*)
-            echo "  PYTHONPATH: /var/www"
-            echo "  FLASK_ENV: production"
-            echo "  DJANGO_SETTINGS_MODULE: app.settings"
-            echo "  SECRET_KEY: <use envSecrets>"
-            ;;
-        php*)
-            echo "  APP_ENV: production"
-            echo "  APP_DEBUG: false"
-            echo "  APP_KEY: <use envSecrets>"
-            ;;
-    esac
-
+    echo "🎯 Common environment variables:"
+    echo "  PORT: 3000"
+    echo "  NODE_ENV: production"
+    echo "  LOG_LEVEL: info"
+    echo "  API_PREFIX: /api"
+    echo "  CORS_ORIGIN: *"
     echo ""
     echo "💡 AI RECOMMENDATIONS:"
     echo "Based on the analysis above, the AI should determine:"
     echo "1. Required environment variables from code analysis"
     echo "2. Optimal service connections to configure"
-    echo "3. Security best practices for the framework"
+    echo "3. Security best practices for the detected technology"
     echo "4. Performance-related configurations"
 }
 
@@ -941,3 +1061,6 @@ export -f apply_workaround can_ssh has_live_reload monitor_reload
 export -f check_application_health diagnose_issue diagnose_502_enhanced
 export -f create_safe_yaml validate_service_type validate_service_name get_service_role
 export -f mask_sensitive_output show_env_safe sync_env_to_zaia security_scan
+export -f zaia_exec verify_check get_development_service deployment_exists
+export -f ensure_subdomain verify_service_exists verify_git_state verify_build_success
+export -f check_deployment_status verify_health generate_service_yaml
