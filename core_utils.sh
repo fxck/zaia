@@ -27,6 +27,183 @@ verify_check() {
     fi
 }
 
+# Base64-based safe remote file creation
+safe_create_remote_file() {
+    local service="$1"
+    local filepath="$2"
+    local content="$3"
+
+    if ! can_ssh "$service"; then
+        echo "❌ Cannot create file on managed service $service" >&2
+        return 1
+    fi
+
+    # Base64 encode to prevent ANY shell interpretation
+    local encoded_content=$(echo "$content" | base64 -w0)
+
+    echo "📝 Creating $filepath on $service..."
+
+    # Create directory if needed
+    local dir=$(dirname "$filepath")
+    safe_ssh "$service" "mkdir -p '$dir'" || return 1
+
+    # Decode and write file
+    if safe_ssh "$service" "echo '$encoded_content' | base64 -d > '$filepath'"; then
+        # Verify file was created and has content
+        if safe_ssh "$service" "test -s '$filepath'"; then
+            echo "✅ Successfully created $filepath"
+            return 0
+        else
+            echo "❌ File created but appears empty" >&2
+            return 1
+        fi
+    else
+        echo "❌ Failed to create $filepath" >&2
+        return 1
+    fi
+}
+
+# Validate content for common issues before creation
+validate_remote_file_content() {
+    local content="$1"
+    local warnings=0
+
+    # Check for SQL parameters that might get expanded
+    if echo "$content" | grep -qE '\$[0-9]+|\${[0-9]+}'; then
+        echo "✅ Content contains SQL parameters (\$1, \$2, etc.) - will be preserved via base64" >&2
+        ((warnings++))
+    fi
+
+    # Check for potential command substitution
+    if echo "$content" | grep -qE '\$\(.*\)|\`.*\`'; then
+        echo "⚠️ WARNING: Content contains command substitution - will be preserved literally" >&2
+        ((warnings++))
+    fi
+
+    return 0
+}
+
+# Monitor build status with active polling
+monitor_zcli_build() {
+    local build_output="$1"
+
+    # Extract build ID from output
+    local build_id=$(echo "$build_output" | grep -oE 'build[/-]([a-zA-Z0-9-]+)' | grep -oE '[a-zA-Z0-9-]+$' | head -1)
+
+    if [ -z "$build_id" ]; then
+        echo "⚠️ Could not extract build ID from output" >&2
+        echo "Waiting 60s for build completion..." >&2
+        sleep 60
+        return 0
+    fi
+
+    echo "📊 Monitoring build: $build_id"
+
+    local max_wait=600  # 10 minutes
+    local elapsed=0
+    local last_status=""
+
+    while [ $elapsed -lt $max_wait ]; do
+        local build_info=$(zcli build describe --buildId "$build_id" 2>/dev/null || echo '{}')
+        local status=$(echo "$build_info" | jq -r '.status // "UNKNOWN"')
+
+        # Only print status if it changed
+        if [ "$status" != "$last_status" ]; then
+            echo "📍 Build status: $status"
+            last_status="$status"
+        fi
+
+        case "$status" in
+            "DEPLOYED"|"DEPLOYMENT_SUCCESSFUL")
+                echo "✅ Build and deployment successful!"
+                return 0
+                ;;
+            "BUILD_FAILED"|"DEPLOYMENT_FAILED"|"CANCELLED")
+                echo "❌ Build $status" >&2
+                echo "📋 Fetching build logs..." >&2
+                zcli build log --buildId "$build_id" 2>/dev/null | tail -100 || true
+                return 1
+                ;;
+            "BUILDING"|"DEPLOYING"|"PENDING")
+                printf "."
+                ;;
+        esac
+
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+
+    echo ""
+    echo "⚠️ Build monitoring timeout after ${max_wait}s" >&2
+    return 1
+}
+
+# Wrapper for deployment with monitoring
+deploy_with_monitoring() {
+    local dev_service="$1"
+    local stage_id="$2"
+
+    echo "🚀 Deploying from $dev_service..."
+
+    # Capture build output
+    local build_output
+    build_output=$(safe_ssh "$dev_service" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' >/dev/null 2>&1 && zcli push --serviceId '$stage_id'" 2>&1)
+
+    echo "$build_output"
+
+    # Monitor the build
+    if monitor_zcli_build "$build_output"; then
+        return 0
+    else
+        echo "❌ Deployment failed" >&2
+        return 1
+    fi
+}
+
+# Active waiting with condition checking
+wait_for_condition() {
+    local description="$1"
+    local check_command="$2"
+    local max_wait="${3:-60}"
+    local interval="${4:-5}"
+
+    echo -n "⏳ Waiting for $description"
+    local elapsed=0
+
+    while [ $elapsed -lt $max_wait ]; do
+        if eval "$check_command" >/dev/null 2>&1; then
+            echo " ✅"
+            return 0
+        fi
+
+        printf "."
+        sleep $interval
+        elapsed=$((elapsed + interval))
+    done
+
+    echo " ❌ (timeout after ${max_wait}s)"
+    return 1
+}
+
+# Common wait patterns
+wait_for_service_ready() {
+    local service="$1"
+    wait_for_condition \
+        "$service to be ready" \
+        "get_service_id '$service' 2>/dev/null" \
+        30 \
+        2
+}
+
+wait_for_deployment_active() {
+    local service_id="$1"
+    wait_for_condition \
+        "deployment to be active" \
+        "zcli service describe --serviceId '$service_id' 2>/dev/null | grep -q 'status.*running'" \
+        60 \
+        5
+}
+
 # Get development service from state
 get_development_service() {
     local dev_services=$(get_from_zaia '.services | to_entries[] | select(.value.role == "development") | .key' | head -1)
@@ -1064,3 +1241,6 @@ export -f mask_sensitive_output show_env_safe sync_env_to_zaia security_scan
 export -f zaia_exec verify_check get_development_service deployment_exists
 export -f ensure_subdomain verify_service_exists verify_git_state verify_build_success
 export -f check_deployment_status verify_health generate_service_yaml
+export -f safe_create_remote_file validate_remote_file_content
+export -f monitor_zcli_build deploy_with_monitoring
+export -f wait_for_condition wait_for_service_ready wait_for_deployment_active

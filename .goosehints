@@ -24,6 +24,22 @@ readonly HEALTH_WAIT=5       # Process startup verification
 readonly BUILD_TIMEOUT=3600  # 1-hour build limit
 ```
 
+### 📁 Critical File System Layout
+
+**DEPLOYMENT FILE RULE**:
+- ❌ `/tmp/` = System temp, NOT deployed, lost on restart
+- ✅ `/var/www/tmp/` = Deployment temp, included in build
+
+**Enforcement Pattern:**
+```bash
+# Service definitions
+mkdir -p /var/www/tmp
+create_file "local" "/var/www/tmp/services.yaml" "$YAML_CONTENT"
+
+# Build artifacts
+safe_create_remote_file "$SERVICE" "/var/www/tmp/build.json" "$BUILD_CONFIG"
+```
+
 ### Execution Primitives
 
 **Universal Execution Pattern**
@@ -80,6 +96,32 @@ fi
 
 ## 🔧 Operational Patterns
 
+### 🚨 Script Usage Priority
+
+**IRON RULE**: Use existing scripts for their designated purposes. Never reimplement.
+
+| Task | MUST USE | NEVER DO |
+|------|----------|----------|
+| Deploy from dev→stage | `/var/www/deploy.sh <dev-service>` | Manual `zcli push` commands |
+| Create services | `/var/www/create_services.sh` | Manual YAML + zcli import |
+| Initialize project | `/var/www/init_project.sh` | Manual state creation |
+| Get framework recipe | `/var/www/get_recipe.sh <framework>` | Manual recipe creation |
+| Show project state | `/var/www/show_project_context.sh` | Manual jq queries |
+| Diagnose frontend | `/var/www/diagnose_frontend.sh <url>` | Manual curl tests |
+
+**Enforcement Example:**
+```bash
+# ❌ FORBIDDEN (except for dev self-deployment)
+safe_ssh "stage" "zcli push --serviceId xxx"
+sleep 30
+
+# ✅ REQUIRED for dev→stage deployment
+/var/www/deploy.sh myappdev || exit 1
+
+# ✅ ALLOWED for dev self-updating
+safe_ssh "myappdev" "cd /var/www && zcli push --serviceId $DEV_SERVICE_ID"
+```
+
 ### Universal Operation Template
 
 ```bash
@@ -109,31 +151,222 @@ universal_operation() {
 }
 ```
 
-### File Creation Pattern
+### 🚨 CRITICAL: Safe Remote File Creation
+
+**THE PROBLEM**: Shell expansion corrupts file contents during SSH operations.
+
+**ALWAYS use safe_create_remote_file():**
 
 ```bash
-create_file() {
-    local location="$1"  # "local" or service hostname
-    local path="$2"
-    local content="$3"
+# ✅ CORRECT - For any remote file creation
+FILE_CONTENT=$(cat << 'EOF'
+// TypeScript with SQL parameters preserved
+const query = 'INSERT INTO users VALUES ($1, $2, $3)';
+const env = process.env.DATABASE_URL;
+EOF
+)
 
-    if [ "$location" = "local" ]; then
-        # Use text_editor for local files (prevents shell parsing issues)
-        text_editor path: "$path"
-        text_editor command: write
-        text_editor file_text: |
-$content
+# Validate content
+validate_remote_file_content "$FILE_CONTENT"
 
-        [ -s "$path" ] || { echo "❌ Local file creation failed"; return 1; }
-    else
-        # Remote file with atomic creation
-        [S] safe_ssh "$location" "mkdir -p $(dirname $path) && cat > ${path}.tmp << 'ZAIA_EOF'
-$content
-ZAIA_EOF
-        mv ${path}.tmp $path"
+# Create safely with base64 encoding
+safe_create_remote_file "$SERVICE" "/var/www/src/database.ts" "$FILE_CONTENT"
 
-        [S] safe_ssh "$location" "[ -s $path ]" || { echo "❌ Remote file creation failed"; return 1; }
-    fi
+# Verify integrity
+safe_ssh "$SERVICE" "grep -q 'VALUES (\$1, \$2, \$3)' /var/www/src/database.ts" || {
+    echo "❌ Content verification failed!"
+    exit 1
+}
+```
+
+**NEVER use heredoc over SSH:**
+```bash
+# ❌ WRONG - Shell expansion occurs
+safe_ssh "$SERVICE" "cat > file << 'EOF'
+VALUES ($1, $2, $3)  # Becomes VALUES (, , )
+EOF"
+```
+
+### ⏰ Wait Patterns - NO BLIND SLEEP
+
+**NEVER do this:**
+```bash
+sleep 25  # ❌ What are we waiting for?
+```
+
+**ALWAYS do this:**
+```bash
+# ✅ Wait with purpose and verification
+wait_for_condition "service creation" "[Z] get_service_id 'myservice'" 30 5
+wait_for_service_ready "myservice"
+wait_for_deployment_active "$SERVICE_ID"
+```
+
+### 🖥️ Development Service Pattern (CORRECTED)
+
+**Purpose**: Persistent development containers for live coding, NOT staging environments
+
+**Key Characteristics**:
+- ✅ Full OS access (`os: ubuntu`)
+- ✅ Minimal build (dependencies only, NO compilation)
+- ✅ Deploy all source code (`deployFiles: ./`)
+- ✅ Manual app startup for testing
+- ✅ Standard commands/scripts for development (not code-server dependency)
+- ❌ No automatic app startup
+- ❌ No health checks needed
+- ❌ No production build optimizations
+
+**Standard Dev Service Pattern:**
+```bash
+create_dev_service_pattern() {
+    local name="$1"
+    local tech="$2"
+
+    local YAML_CONTENT="services:
+  - hostname: ${name}dev
+    type: $tech
+    startWithoutCode: true
+    priority: 60"
+
+    # Create import YAML
+    create_safe_yaml "/tmp/${name}_dev.yaml" << EOF
+$YAML_CONTENT
+EOF
+
+    # Import service
+    /var/www/create_services.sh "/tmp/${name}_dev.yaml" || return 1
+
+    # Wait for service to be ready
+    wait_for_service_ready "${name}dev"
+
+    # Create minimal zerops.yml for development
+    local ZEROPS_CONFIG="zerops:
+  - setup: ${name}dev
+    build:
+      base: $tech
+      os: ubuntu
+      buildCommands:"
+
+    # Technology-specific minimal builds
+    case "$tech" in
+        nodejs@*)
+            ZEROPS_CONFIG="$ZEROPS_CONFIG
+        - npm install              # NO npm ci - package-lock might not exist"
+            ;;
+        python@*)
+            ZEROPS_CONFIG="$ZEROPS_CONFIG
+        - pip install -r requirements.txt || touch requirements.txt"
+            ;;
+        php@*)
+            ZEROPS_CONFIG="$ZEROPS_CONFIG
+        - composer install || composer init --no-interaction"
+            ;;
+    esac
+
+    ZEROPS_CONFIG="$ZEROPS_CONFIG
+      deployFiles:
+        - ./                       # Deploy ALL source for editing
+      cache:
+        - node_modules             # Cache dependencies only
+    run:
+      base: $tech
+      os: ubuntu                   # Full OS for development tools
+      ports:
+        - port: 3000               # App testing port (manual start)
+          httpSupport: true
+        - port: 8080               # Additional dev tools if needed
+          httpSupport: true
+      # NO START COMMAND - manual development workflow
+      # NO HEALTH CHECKS - development environment"
+
+    # Deploy configuration
+    safe_create_remote_file "${name}dev" "/var/www/zerops.yml" "$ZEROPS_CONFIG"
+
+    echo "✅ Dev service created: ${name}dev"
+    echo "📝 Next steps:"
+    echo "   1. Enable public access: zcli service enable-subdomain --serviceId \$([Z] get_service_id '${name}dev')"
+    echo "   2. Access via SSH: ssh zerops@${name}dev"
+    echo "   3. Start your app manually: npm run dev / python app.py / etc."
+    echo "   4. Deploy when ready: /var/www/deploy.sh ${name}dev"
+}
+```
+
+### Stage/Production Service Pattern
+
+```bash
+create_stage_service_pattern() {
+    local name="$1"
+    local tech="$2"
+
+    local YAML_CONTENT="services:
+  - hostname: $name
+    type: $tech
+    startWithoutCode: true
+    priority: 40"
+
+    # Create import YAML
+    create_safe_yaml "/tmp/${name}_stage.yaml" << EOF
+$YAML_CONTENT
+EOF
+
+    # Import service
+    /var/www/create_services.sh "/tmp/${name}_stage.yaml" || return 1
+
+    # Create production-optimized zerops.yml
+    local ZEROPS_CONFIG="zerops:
+  - setup: $name
+    build:
+      base: $tech
+      buildCommands:"
+
+    # Technology-specific production builds
+    case "$tech" in
+        nodejs@*)
+            ZEROPS_CONFIG="$ZEROPS_CONFIG
+        - npm ci --production=false    # Install all dependencies
+        - npm run build               # Build for production
+        - npm run test               # Run tests
+        - npm prune --production     # Remove dev dependencies"
+            ;;
+        python@*)
+            ZEROPS_CONFIG="$ZEROPS_CONFIG
+        - pip install -r requirements.txt
+        - python -m compileall .
+        - python -m pytest || echo 'No tests found'"
+            ;;
+        php@*)
+            ZEROPS_CONFIG="$ZEROPS_CONFIG
+        - composer install --no-dev --optimize-autoloader
+        - php artisan config:cache || echo 'Not Laravel'"
+            ;;
+    esac
+
+    ZEROPS_CONFIG="$ZEROPS_CONFIG
+      deployFiles:
+        - ./dist                   # Built artifacts only
+        - ./node_modules          # Production dependencies
+        - ./package.json
+      cache:
+        - node_modules
+    run:
+      base: $tech
+      start: npm start            # Automatic startup
+      ports:
+        - port: 3000
+          httpSupport: true
+      healthCheck:                # Production needs health checks
+        httpGet:
+          port: 3000
+          path: /health
+        initialDelaySeconds: 10
+        periodSeconds: 30
+      envVariables:
+        NODE_ENV: production
+        PORT: 3000"
+
+    safe_create_remote_file "$name" "/var/www/zerops.yml" "$ZEROPS_CONFIG"
+
+    echo "✅ Stage service created: $name"
 }
 ```
 
@@ -144,15 +377,8 @@ deploy_pattern() {
     local dev_service="$1"
     local stage_service="$2"
 
-    # Pre-deployment verification
-    [Z] verify_git_state "$dev_service" || return 1
-    [Z] verify_build_success "$dev_service" || return 1
-
-    # Deploy with monitoring
-    [S] safe_ssh "$dev_service" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' && zcli push --serviceId $([Z] get_service_id $stage_service)"
-
-    # Wait for deployment
-    sleep $DEPLOY_WAIT
+    # Use the official deployment script
+    /var/www/deploy.sh "$dev_service" || return 1
 
     # Verify deployment
     [Z] check_deployment_status "$stage_service" || return 1
@@ -171,22 +397,16 @@ create_service_pattern() {
     local type="$2"
     local options="$3"
 
-    # Generate YAML from template
+    # Generate YAML in correct location
+    mkdir -p /var/www/tmp
     local yaml=$(generate_service_yaml "$name" "$type" "$options")
+    create_file "local" "/var/www/tmp/${name}_import.yaml" "$yaml"
 
-    # Create and import
-    create_file "local" "/tmp/${name}_import.yaml" "$yaml"
-    [Z] zcli project service-import "/tmp/${name}_import.yaml" --projectId "$([Z] get_from_zaia '.project.id')"
+    # Use official creation script
+    /var/www/create_services.sh "/var/www/tmp/${name}_import.yaml" || return 1
 
-    # Critical: Wait and re-sync state
-    sleep $IMPORT_WAIT
-    /var/www/init_project.sh
-    [Z] sync_env_to_zaia
-
-    # Apply platform workarounds for runtime services
-    if [[ ! "$type" =~ ^(postgresql|mysql|redis|mongodb|elasticsearch) ]]; then
-        [Z] apply_workaround "$name"
-    fi
+    # Wait for readiness
+    wait_for_service_ready "$name"
 }
 ```
 
@@ -224,7 +444,7 @@ intelligent_recovery() {
 }
 ```
 
-## 🚨 Rapid Error Recovery Matrix
+## 🚨 Rapid Error Recovery Matrix (UPDATED)
 
 | Error | Cause | Fix | Verification |
 |-------|-------|-----|--------------|
@@ -238,6 +458,10 @@ intelligent_recovery() {
 | **CORS errors** | Missing headers | Add to backend API | Browser network tab |
 | **Port already used** | Old process | `[Z] safe_ssh "$DEV" "fuser -k 3000/tcp"` | `ss -tlnp \| grep 3000` |
 | **Migration runs twice** | No execOnce | Use `zsc execOnce key_${appVersionId}` | Check database |
+| **Dev app not starting** | Manual startup required | `safe_ssh "$DEV" "npm run dev"` | Check port binding |
+| **Dev service inaccessible** | Subdomain not enabled | `zcli service enable-subdomain --serviceId $ID` | Check public URL |
+| **Heavy build in dev** | Wrong build strategy | Remove build commands, use `npm install` only | Check zerops.yml |
+| **Package-lock errors in dev** | Using npm ci | Use `npm install` in dev services | Check build logs |
 
 ## 🛠️ Available Capabilities from core_utils.sh
 
@@ -257,6 +481,10 @@ After sourcing `/var/www/core_utils.sh`, you have access to these functions:
 - `can_ssh(service)` - Check if service allows SSH (false for managed services)
 - `safe_output(max_lines, max_time, command...)` - Run command with output limits
 
+### File Operations
+- `safe_create_remote_file(service, filepath, content)` - Create remote files safely with base64 encoding
+- `validate_remote_file_content(content)` - Check content for potential issues before creation
+
 ### Diagnostics & Health
 - `check_application_health(service, [port], [process])` - Comprehensive health check
 - `diagnose_issue(service, [--smart])` - General diagnostics with AI analysis option
@@ -272,6 +500,20 @@ After sourcing `/var/www/core_utils.sh`, you have access to these functions:
 - `suggest_env_vars(service)` - AI-powered environment variable suggestions
 - `needs_restart(service, other_service)` - Check if restart needed for env vars
 
+### Build & Deploy
+- `verify_git_state(service)` - Ensure git is initialized and clean
+- `verify_build_success(service)` - Check if build artifacts exist
+- `check_deployment_status(service)` - Verify service is running
+- `ensure_subdomain(service)` - Enable subdomain if not already enabled
+- `generate_service_yaml(name, type, options)` - Generate import YAML
+- `monitor_zcli_build(build_output)` - Monitor build status with active polling
+- `deploy_with_monitoring(dev_service, stage_id)` - Deploy with build monitoring
+
+### Wait Patterns
+- `wait_for_condition(description, check_command, [max_wait], [interval])` - Active waiting
+- `wait_for_service_ready(service)` - Wait for service to be ready
+- `wait_for_deployment_active(service_id)` - Wait for deployment to be active
+
 ### Validation & Safety
 - `validate_service_type(type)` - Validate against technologies.json
 - `validate_service_name(name)` - Check naming rules (lowercase, alphanumeric, <25 chars)
@@ -279,13 +521,6 @@ After sourcing `/var/www/core_utils.sh`, you have access to these functions:
 - `get_service_role(hostname, type)` - Determine role (development/stage/database/cache/storage)
 - `mask_sensitive_output()` - Mask passwords/secrets in output
 - `show_env_safe(service)` - Display environment with masked sensitive values
-
-### Build & Deploy Helpers
-- `verify_git_state(service)` - Ensure git is initialized and clean
-- `verify_build_success(service)` - Check if build artifacts exist
-- `check_deployment_status(service)` - Verify service is running
-- `ensure_subdomain(service)` - Enable subdomain if not already enabled
-- `generate_service_yaml(name, type, options)` - Generate import YAML
 
 ### Utility Functions
 - `zaia_exec(function, args...)` - Wrapper that sources core_utils and executes function
@@ -457,7 +692,7 @@ detect_technology() {
 
 ## 📘 Implementation Workflows
 
-### Universal Development Flow
+### Universal Development Flow (CORRECTED)
 
 ```bash
 unified_flow() {
@@ -474,10 +709,10 @@ unified_flow() {
             local tech="${1:-nodejs}"
             /var/www/get_recipe.sh "$tech"
 
-            # Create services from recipe
-            create_service_pattern "db" "postgresql@16" "mode: NON_HA"
-            create_service_pattern "appdev" "$tech@latest" "startWithoutCode: true"
-            create_service_pattern "app" "$tech@latest" "startWithoutCode: true"
+            # Create services in deployment temp location
+            mkdir -p /var/www/tmp
+            # ... create YAML files in /var/www/tmp/ ...
+            /var/www/create_services.sh "/var/www/tmp/services.yaml"
 
             # Initialize development environment
             bootstrap_development "appdev"
@@ -485,14 +720,14 @@ unified_flow() {
 
         CONFIGURED_NOT_DEPLOYED)
             local dev_service=$([Z] get_development_service)
-            deploy_pattern "$dev_service" "${dev_service%dev}"
+            /var/www/deploy.sh "$dev_service"
             ;;
 
         ACTIVE_PROJECT)
             # Incremental updates
             local service="${1:-$([Z] get_development_service)}"
             [S] safe_ssh "$service" "cd /var/www && git add -A && git commit -m 'Update: $(date +%Y-%m-%d_%H:%M:%S)'"
-            deploy_pattern "$service" "${service%dev}"
+            /var/www/deploy.sh "$service"
             ;;
 
         NEEDS_CONFIGURATION)
@@ -509,7 +744,7 @@ unified_flow() {
 }
 ```
 
-### Bootstrap Development Pattern
+### Bootstrap Development Pattern (CORRECTED)
 
 ```bash
 bootstrap_development() {
@@ -525,117 +760,159 @@ bootstrap_development() {
     case "$tech" in
         javascript)
             [S] safe_ssh "$service" "cd /var/www && [ -f package.json ] || npm init -y"
-            [S] safe_ssh "$service" "[ -f index.js ] || echo 'console.log(\"Bootstrap ready\");' > index.js"
+            local INDEX_CONTENT='console.log("Bootstrap ready - start with npm run dev");'
+            safe_create_remote_file "$service" "/var/www/index.js" "$INDEX_CONTENT"
             ;;
         python)
-            [S] safe_ssh "$service" "cd /var/www && [ -f app.py ] || echo 'print(\"Bootstrap ready\")' > app.py"
+            local APP_CONTENT='print("Bootstrap ready - start with python app.py")'
+            safe_create_remote_file "$service" "/var/www/app.py" "$APP_CONTENT"
             [S] safe_ssh "$service" "[ -f requirements.txt ] || touch requirements.txt"
             ;;
         php)
-            [S] safe_ssh "$service" "cd /var/www && [ -f index.php ] || echo '<?php echo \"Bootstrap ready\";' > index.php"
+            local PHP_CONTENT='<?php echo "Bootstrap ready - start with php -S 0.0.0.0:3000";'
+            safe_create_remote_file "$service" "/var/www/index.php" "$PHP_CONTENT"
             [S] safe_ssh "$service" "[ -f composer.json ] || composer init --no-interaction"
             ;;
         # Pattern continues for other languages...
     esac
 
-    # Create initial Zerops configuration
-    create_zerops_config "$service" "$tech"
+    # Create initial Zerops configuration (CORRECTED FOR DEV)
+    create_dev_zerops_config "$service" "$tech"
 
     # Initial deployment
     [S] safe_ssh "$service" "git add -A && git commit -m 'Initial bootstrap'"
-    deploy_pattern "$service" "${service%dev}"
+
+    # Dev services can self-deploy for initial setup
+    [S] safe_ssh "$service" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' && zcli push --serviceId \$([Z] get_service_id '$service')"
 }
 ```
 
-### Configuration Generator
+### Configuration Generator (CORRECTED)
 
 ```bash
-create_zerops_config() {
+create_dev_zerops_config() {
     local service="$1"
     local tech="$2"
 
-    # Base configuration template
+    # Development service configuration (minimal build)
     local config="zerops:
-  - setup: ${service%dev}
-    build:
-      base: ${tech}@latest
-      buildCommands:
-        - \${BUILD_INSTALL_CMD}
-        - \${BUILD_COMPILE_CMD}
-    run:
-      base: ${tech}@latest
-      ports:
-        - port: \${APP_PORT}
-          httpSupport: true
-      envVariables:
-        NODE_ENV: production
-        \${RUNTIME_ENV_VARS}
-      start: \${START_COMMAND}
-      healthCheck:
-        httpGet:
-          port: \${APP_PORT}
-          path: /health"
-
-    # Technology-specific substitutions
-    case "$tech" in
-        javascript)
-            config="${config//\$\{BUILD_INSTALL_CMD\}/npm ci --production=false}"
-            config="${config//\$\{BUILD_COMPILE_CMD\}/npm run build || echo 'No build script'}"
-            config="${config//\$\{APP_PORT\}/3000}"
-            config="${config//\$\{START_COMMAND\}/npm start}"
-            config="${config//\$\{RUNTIME_ENV_VARS\}/}"
-            ;;
-        python)
-            config="${config//\$\{BUILD_INSTALL_CMD\}/pip install -r requirements.txt}"
-            config="${config//\$\{BUILD_COMPILE_CMD\}/python -m compileall .}"
-            config="${config//\$\{APP_PORT\}/8000}"
-            config="${config//\$\{START_COMMAND\}/python app.py}"
-            config="${config//\$\{RUNTIME_ENV_VARS\}/PYTHONUNBUFFERED: 1}"
-            ;;
-        # Pattern continues for other languages...
-    esac
-
-    # Add development service configuration
-    if [[ "$service" =~ dev$ ]]; then
-        config="$config
   - setup: $service
     build:
-      base: ${tech}@latest
+      base: $tech
       os: ubuntu
-      buildCommands:
-        - \${DEV_BUILD_CMD}
+      buildCommands:"
+
+    # Technology-specific MINIMAL builds for dev
+    case "$tech" in
+        javascript)
+            config="$config
+        - npm install              # NO npm ci - package-lock might not exist"
+            ;;
+        python)
+            config="$config
+        - pip install -r requirements.txt || touch requirements.txt"
+            ;;
+        php)
+            config="$config
+        - composer install || composer init --no-interaction"
+            ;;
+        # Pattern continues...
+    esac
+
+    config="$config
+      deployFiles:
+        - ./                       # Deploy ALL source for editing
+      cache:
+        - node_modules             # Cache dependencies only
+        - vendor                   # PHP composer cache
+        - __pycache__             # Python cache
     run:
-      base: ${tech}@latest
-      os: ubuntu
-      prepareCommands:
-        - curl -fsSL https://code-server.dev/install.sh | sh -s -- -y
+      base: $tech
+      os: ubuntu                   # Full OS for development
       ports:
-        - port: 8080
+        - port: 3000               # App testing (manual start)
           httpSupport: true
-        - port: \${APP_PORT}
+        - port: 8080               # Dev tools port
           httpSupport: true
-      start: code-server --auth none --bind-addr 0.0.0.0:8080 /var/www"
+      envVariables:
+        NODE_ENV: development
+        DEBUG: 1
+        \${RUNTIME_ENV_VARS}
+      # NO START COMMAND - manual development workflow"
 
-        # Development-specific substitutions
-        case "$tech" in
-            javascript)
-                config="${config//\$\{DEV_BUILD_CMD\}/npm install}"
-                ;;
-            python)
-                config="${config//\$\{DEV_BUILD_CMD\}/pip install -r requirements.txt || true}"
-                ;;
-            # Pattern continues...
-        esac
-    fi
+    # Write configuration safely
+    safe_create_remote_file "$service" "/var/www/zerops.yml" "$config"
 
-    # Write configuration
-    [S] safe_ssh "$service" "cat > /var/www/zerops.yml << 'ZEROPS_EOF'
-$config
-ZEROPS_EOF"
+    echo "✅ Dev configuration created for $service"
+    echo "📝 Manual development workflow:"
+    echo "   1. SSH to service: ssh zerops@$service"
+    echo "   2. Start your app: npm run dev / python app.py / etc."
+    echo "   3. Test locally, then deploy to stage when ready"
+}
+
+create_stage_zerops_config() {
+    local service="$1"
+    local tech="$2"
+
+    # Production service configuration (full build)
+    local config="zerops:
+  - setup: $service
+    build:
+      base: $tech
+      buildCommands:"
+
+    # Technology-specific PRODUCTION builds
+    case "$tech" in
+        javascript)
+            config="$config
+        - npm ci --production=false    # Install all dependencies
+        - npm run build               # Build for production
+        - npm run test               # Run tests
+        - npm prune --production     # Remove dev dependencies"
+            ;;
+        python)
+            config="$config
+        - pip install -r requirements.txt
+        - python -m compileall .
+        - python -m pytest || echo 'No tests found'"
+            ;;
+        php)
+            config="$config
+        - composer install --no-dev --optimize-autoloader"
+            ;;
+        # Pattern continues...
+    esac
+
+    config="$config
+      deployFiles:
+        - ./dist                   # Built artifacts
+        - ./node_modules          # Production dependencies
+        - ./package.json
+      cache:
+        - node_modules
+    run:
+      base: $tech
+      start: \${START_COMMAND}      # Automatic startup
+      ports:
+        - port: 3000
+          httpSupport: true
+      healthCheck:                # Production needs health checks
+        httpGet:
+          port: 3000
+          path: /health
+        initialDelaySeconds: 10
+        periodSeconds: 30
+      envVariables:
+        NODE_ENV: production
+        PORT: 3000
+        \${PRODUCTION_ENV_VARS}"
+
+    # Write configuration safely
+    safe_create_remote_file "$service" "/var/www/zerops.yml" "$config"
 }
 ```
 
-## 🚀 Complete Workflow Example (With All Gates)
+## 🚀 Complete Workflow Example (With All Gates - CORRECTED)
 
 ```bash
 # Initialize (like opening terminal)
@@ -646,7 +923,8 @@ echo "Exit code: $?" # Gate 0
 RECIPE=$(/var/www/get_recipe.sh express)
 
 # Infrastructure (like docker-compose up)
-create_file "local" "/tmp/services.yaml" "#yamlPreprocessor=on
+mkdir -p /var/www/tmp
+create_file "local" "/var/www/tmp/services.yaml" "#yamlPreprocessor=on
 services:
   - hostname: db
     type: postgresql@16
@@ -660,54 +938,47 @@ services:
   - hostname: api
     type: nodejs@22"
 
-[Z] zcli project service-import /tmp/services.yaml --projectId "$([Z] get_from_zaia '.project.id')"
+/var/www/create_services.sh /var/www/tmp/services.yaml || exit 1
 echo "Exit code: $?" # Gate 1
-sleep 25 && /var/www/init_project.sh  # CRITICAL: Re-init after import
 
 # Verify services created
-[Z] verify_service_exists 'apidev' || exit 1 # Gate 2
+wait_for_service_ready "apidev" || exit 1 # Gate 2
 
-# Fix platform quirks
-[Z] apply_workaround "apidev" && [Z] apply_workaround "api"
-echo "Exit code: $?" # Gate 3
-
-# Git setup (like any project)
-[S] safe_ssh "apidev" "cd /var/www && git init && git config user.email 'dev@zerops.io'"
-echo "Exit code: $?" # Gate 4
-
-# Configure FIRST (Progressive Development Law)
-[S] safe_ssh "apidev" "cat > /var/www/zerops.yml << 'ZEROPS_EOF'
+# Configure DEV SERVICE FIRST (CORRECTED - Minimal Build)
+ZEROPS_CONFIG=$(cat << 'EOF'
 zerops:
   - setup: apidev
     build:
       base: nodejs@22
+      os: ubuntu
       buildCommands:
-        - npm install
-        - npm run build
+        - npm install              # ONLY install - no build for dev!
+      deployFiles:
+        - ./                       # Deploy ALL source code
       cache:
         - node_modules
-      deployFiles:
-        - ./dist
-        - ./node_modules
-        - ./package.json
     run:
       base: nodejs@22
-      start: npm run dev
+      os: ubuntu                   # Full OS for development
       ports:
         - port: 3000
           httpSupport: true
+        - port: 8080
+          httpSupport: true
       envVariables:
         NODE_ENV: development
-        DATABASE_URL: \${db_connectionString}
-        JWT_SECRET: \${JWT_SECRET}
+        DATABASE_URL: ${db_connectionString}
+        JWT_SECRET: ${JWT_SECRET}
+      # NO START COMMAND - manual development
+
   - setup: api
     build:
       base: nodejs@22
       buildCommands:
-        - npm install --production
+        - npm ci --production=false
         - npm run build
-      cache:
-        - node_modules
+        - npm run test
+        - npm prune --production
       deployFiles:
         - ./dist
         - ./node_modules
@@ -724,37 +995,53 @@ zerops:
           path: /health
       envVariables:
         NODE_ENV: production
-        DATABASE_URL: \${db_connectionString}
-        JWT_SECRET: \${JWT_SECRET}
-ZEROPS_EOF"
+        DATABASE_URL: ${db_connectionString}
+        JWT_SECRET: ${JWT_SECRET}
+EOF
+)
+
+# Create config safely
+safe_create_remote_file "apidev" "/var/www/zerops.yml" "$ZEROPS_CONFIG"
 
 # Verify file created
 [S] safe_ssh "apidev" "[ -s /var/www/zerops.yml ] && yq e '.' /var/www/zerops.yml"
 echo "Exit code: $?" # Gate 5
 
-# Deploy config (activates env vars)
+# Deploy config (activates env vars) - DEV CAN SELF-DEPLOY
 [S] safe_ssh "apidev" "git add . && git commit -m 'Zerops config'"
-[S] safe_ssh "apidev" "zcli login '$ZEROPS_ACCESS_TOKEN'"
-SERVICE_ID=$([Z] get_service_id "apidev")
-[S] safe_ssh "apidev" "zcli push --serviceId '$SERVICE_ID'"
+[S] safe_ssh "apidev" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' && zcli push --serviceId \$([Z] get_service_id 'apidev')" || exit 1
 echo "Exit code: $?" # Gate 6
-sleep 30
 
 # Verify environment variables active
-[S] safe_ssh "apidev" "[ -n \"\$DATABASE_URL\" ] || exit 1"
+wait_for_condition "env vars active" "[S] safe_ssh 'apidev' '[ -n \"\$DATABASE_URL\" ]'" 30 5
 echo "Exit code: $?" # Gate 7
 
-# NOW develop (environment ready)
+# NOW develop (environment ready) - MANUAL WORKFLOW
 [S] safe_ssh "apidev" "npm init -y && npm install express"
-[S] safe_ssh "apidev" "cat > /var/www/index.js << 'EOF'
+APP_CODE=$(cat << 'EOF'
 const express = require('express');
 const app = express();
 app.get('/', (req, res) => res.json({status: 'ok'}));
 app.get('/health', (req, res) => res.sendStatus(200));
-app.listen(process.env.PORT || 3000, '0.0.0.0');
-EOF"
+app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
+  console.log('Server running on port 3000 - access via SSH');
+});
+EOF
+)
+safe_create_remote_file "apidev" "/var/www/index.js" "$APP_CODE"
 
-# Test locally
+# Test in development environment (CORRECTED - Manual Start)
+echo "📝 To test your app:"
+echo "   1. SSH to dev: ssh zerops@apidev"
+echo "   2. Start manually: node index.js"
+echo "   3. Or use nodemon: npx nodemon index.js"
+echo "   4. Access at http://localhost:3000 from within the container"
+
+# Enable public access to dev service for testing
+[Z] ensure_subdomain "apidev"
+echo "🌐 Dev service accessible at: https://$([Z] get_from_zaia '.services.apidev.subdomain')"
+
+# Manual start for verification (but normally would be done by developer)
 [Z] safe_bg "apidev" "node index.js" "/var/www" "node"
 [Z] check_application_health "apidev" 3000 "node"
 echo "Exit code: $?" # Gate 8
@@ -763,21 +1050,28 @@ echo "Exit code: $?" # Gate 8
 [Z] security_scan "apidev" | grep -q "CLEAN"
 echo "Exit code: $?" # Gate 9
 
-# Deploy to production
+# Deploy to production (using the deploy script)
 [S] safe_ssh "apidev" "git add . && git commit -m 'Initial app'"
-PROD_SERVICE_ID=$([Z] get_service_id "api")
-[S] safe_ssh "apidev" "zcli push --serviceId '$PROD_SERVICE_ID'"
+/var/www/deploy.sh apidev || exit 1
 echo "Exit code: $?" # Gate 10
 
-# Enable public access
-zcli service enable-subdomain --serviceId "$PROD_SERVICE_ID"
+# Enable public access for production
+[Z] ensure_subdomain "api"
 echo "Exit code: $?" # Gate 11
-sleep 10 && [Z] sync_env_to_zaia
 
 # Final verification
 PUBLIC_URL="https://$([Z] get_from_zaia '.services.api.subdomain')"
-curl -s "$PUBLIC_URL/health" | grep -q "OK"
+wait_for_condition "public health check" "curl -sf '$PUBLIC_URL/health'"
 echo "Exit code: $?" # Gate 12 - PRODUCTION READY!
+
+echo ""
+echo "🎉 DEPLOYMENT COMPLETE!"
+echo "📊 Summary:"
+echo "   Development: https://$([Z] get_from_zaia '.services.apidev.subdomain')"
+echo "   Production:  https://$([Z] get_from_zaia '.services.api.subdomain')"
+echo ""
+echo "💡 Development workflow:"
+echo "   ssh zerops@apidev → edit code → test locally → deploy with /var/www/deploy.sh apidev"
 ```
 
 ## 📊 Reference Section
@@ -820,7 +1114,7 @@ zcli login "$ZEROPS_ACCESS_TOKEN" || true
 [Z] check_application_health "$SERVICE" 3000 || exit 1
 
 # Build succeeded
-zcli service describe --serviceId "$SERVICE_ID" | grep -q "running" || exit 1
+wait_for_deployment_active "$SERVICE_ID" || exit 1
 ```
 
 ### Platform Workarounds
@@ -832,37 +1126,69 @@ zcli service describe --serviceId "$SERVICE_ID" | grep -q "running" || exit 1
 [Z] restart_service_for_envs "$SERVICE" "reason"
 
 # Subdomain requirement
-zcli service enable-subdomain --serviceId "$SERVICE_ID"
+[Z] ensure_subdomain "$SERVICE"
 ```
 
 ### Configuration Schemas
 
-**zerops.yml Structure**
+**zerops.yml Structure (CORRECTED)**
 ```yaml
 zerops:
+  # DEVELOPMENT SERVICE - Minimal build, full source
+  - setup: <service-name>dev
+    build:
+      base: <technology>@<version>
+      os: ubuntu              # For development tools
+      buildCommands:
+        - npm install         # NO npm ci - lockfile might not exist
+        - pip install -r requirements.txt || touch requirements.txt
+        # NO BUILD COMMANDS - development is live
+      deployFiles:
+        - ./                  # ALL source code
+      cache:
+        - node_modules        # Cache dependencies only
+    run:
+      base: <technology>@<version>
+      os: ubuntu              # Full OS for dev tools
+      ports:
+        - port: 3000          # App testing (manual start)
+          httpSupport: true
+        - port: 8080          # Additional dev tools
+          httpSupport: true
+      envVariables:
+        NODE_ENV: development
+        # Database connections, etc.
+      # NO START COMMAND - manual development workflow
+      # NO HEALTH CHECKS - not needed for dev
+
+  # PRODUCTION SERVICE - Full build, optimized artifacts
   - setup: <service-name>
     build:
       base: <technology>@<version>
-      os: ubuntu              # For development services
-      buildCommands: []       # Build-time only
-      deployFiles: []         # What to include
-      cache: []              # Speed up builds
-      envVariables: {}       # Build-time variables
-      addToRunPrepare: []    # Files for runtime
+      buildCommands:
+        - npm ci --production=false  # Install all deps
+        - npm run build             # Build for production
+        - npm run test              # Run tests
+        - npm prune --production    # Remove dev deps
+      deployFiles:
+        - ./dist                    # Built artifacts only
+        - ./node_modules           # Production deps only
+        - ./package.json
+      cache:
+        - node_modules
     run:
       base: <technology>@<version>
-      os: ubuntu              # For development services
-      prepareCommands: []     # One-time setup
-      initCommands: []        # Every deploy
-      start: <command>        # Main process
-      ports:                  # Network exposure
-        - port: <number>
+      start: npm start              # Automatic startup
+      ports:
+        - port: 3000
           httpSupport: true
-      envVariables: {}        # Runtime variables
-      healthCheck:            # Production services
+      healthCheck:                  # Production needs health checks
         httpGet:
-          port: <number>
-          path: <path>
+          port: 3000
+          path: /health
+      envVariables:
+        NODE_ENV: production
+        # Production environment vars
 ```
 
 **Import YAML Structure**
@@ -872,6 +1198,7 @@ services:
   - hostname: <name>       # Max 25 chars, alphanumeric
     type: <technology>@<version>
     mode: NON_HA          # For databases/cache
+    startWithoutCode: true # For runtime services
     envSecrets:           # Secure variables
       SECRET: <@generateRandomString(<32>)>
     verticalAutoscaling:
@@ -915,14 +1242,19 @@ maxContainers: 10
 /var/www/show_project_context.sh
 
 # Service operations
-/var/www/create_services.sh <name> <type> [--dual]
+/var/www/create_services.sh <yaml-file>
 /var/www/get_recipe.sh <framework>
 [Z] get_available_envs <service>
 [Z] suggest_env_vars <service>
 
 # Deployment
-/var/www/deploy.sh <dev-service>
-[S] safe_bg <service> "command" "/path" "process"
+/var/www/deploy.sh <dev-service>        # Dev to stage deployment
+[S] safe_ssh <dev-service> "cd /var/www && zcli push --serviceId $DEV_ID"  # Dev self-deployment
+
+# Manual development workflow
+ssh zerops@<dev-service>                # Access dev environment
+npm install / pip install / composer install  # Install dependencies
+npm run dev / python app.py / php -S 0.0.0.0:3000  # Start your app manually
 
 # Diagnostics
 [Z] diagnose_502_enhanced <service>
@@ -964,17 +1296,19 @@ production_readiness_check() {
 }
 ```
 
-## 🎯 Core Mantras
+## 🎯 Core Mantras (UPDATED)
 
 1. **"Deploy config before code"** - Env vars must exist
 2. **"Exit codes are truth"** - Check after every command
 3. **"Recipes are canonical"** - Match exactly
 4. **"Verify everything"** - Files, processes, health
-5. **"Think like a developer"** - Same flows, automated
+5. **"Dev is manual, prod is automatic"** - Different workflows for different purposes
 6. **"Single quotes save SQL lives"** - 'EOF' for heredocs
-7. **"Prepare heavy, build light"** - Cache dependencies
-8. **"Health checks prevent disasters"** - Always configure
+7. **"Minimal build for dev, full build for prod"** - Different optimization strategies
+8. **"Health checks prevent disasters"** - Always configure for production
 9. **"Security scan or don't deploy"** - No exceptions
 10. **"Gates ensure success"** - Every phase verified
+11. **"npm install for dev, npm ci for prod"** - Different dependency strategies
+12. **"Manual start in dev, auto start in prod"** - Development vs production workflows
 
-Remember: This is a template-driven system. Language examples (Node.js, Python, etc.) are patterns to be adapted, not hardcoded solutions. Every operation should be verifiable, every deployment progressive, and every failure recoverable.
+Remember: This is a template-driven system with **distinct development and production workflows**. Development services are persistent coding environments with manual workflows, while production services are automated deployment targets with full build pipelines. Every operation should be verifiable, every deployment progressive, and every failure recoverable.

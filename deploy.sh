@@ -68,8 +68,40 @@ echo "════════════════════════�
 echo "PHASE 1: TECHNOLOGY DETECTION"
 echo "═══════════════════════════════════════════════════════════"
 
+# Function to detect technology
+detect_technology() {
+    local service="$1"
+
+    # Language-agnostic detection pattern
+    local indicators=(
+        "package.json:javascript"
+        "composer.json:php"
+        "requirements.txt:python"
+        "Gemfile:ruby"
+        "go.mod:go"
+        "Cargo.toml:rust"
+        "pom.xml:java"
+        "build.gradle:java"
+        "mix.exs:elixir"
+        "pubspec.yaml:dart"
+        ".csproj:dotnet"
+    )
+
+    for indicator in "${indicators[@]}"; do
+        local file="${indicator%%:*}"
+        local lang="${indicator#*:}"
+
+        if safe_ssh "$service" "test -f /var/www/$file" 2>/dev/null; then
+            echo "$lang"
+            return 0
+        fi
+    done
+
+    echo "unknown"
+}
+
 # Detect technology
-TECH=$(zaia_exec detect_technology "$DEV")
+TECH=$(detect_technology "$DEV")
 echo "🔍 Detected technology: $TECH"
 
 # Phase 2: Project Analysis
@@ -179,7 +211,7 @@ if [ "$SKIP_BUILD" = false ]; then
     esac
 
     # Verify build output
-    zaia_exec verify_build_success "$DEV" || [ "$FORCE" = true ] || exit 1
+    verify_build_success "$DEV" || [ "$FORCE" = true ] || exit 1
 fi
 
 # Phase 4: Test Execution (if not skipped)
@@ -251,14 +283,14 @@ echo "════════════════════════�
 
 echo "🚀 Deploying to $STAGE..."
 
-# Execute deployment
-if ! safe_ssh "$DEV" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' && zcli push --serviceId '$STAGE_ID'"; then
+# Use the new monitoring function
+if ! deploy_with_monitoring "$DEV" "$STAGE_ID"; then
     echo "❌ Deployment failed"
     exit 1
 fi
 
-echo "⏳ Waiting for deployment to stabilize..."
-sleep 30
+# Additional verification
+sleep 5  # Brief pause for service startup
 
 # Phase 7: Verification
 echo ""
@@ -267,7 +299,7 @@ echo "PHASE 7: POST-DEPLOYMENT VERIFICATION"
 echo "═══════════════════════════════════════════════════════════"
 
 # Check deployment status
-if ! zaia_exec check_deployment_status "$STAGE"; then
+if ! check_deployment_status "$STAGE"; then
     echo "❌ Deployment verification failed"
     exit 1
 fi
@@ -283,17 +315,17 @@ fi
 echo ""
 echo "🏥 Running health check..."
 PORT=$(safe_ssh "$STAGE" "echo \$PORT" 2>/dev/null || echo "3000")
-zaia_exec check_application_health "$STAGE" "$PORT" || echo "⚠️ Health check failed"
+check_application_health "$STAGE" "$PORT" || echo "⚠️ Health check failed"
 
 # Enable subdomain if needed
 echo ""
 echo "🌐 Checking public access..."
-zaia_exec ensure_subdomain "$STAGE"
+ensure_subdomain "$STAGE"
 
 # Update state
 echo ""
 echo "🔄 Updating project state..."
-zaia_exec sync_env_to_zaia
+sync_env_to_zaia
 
 # Get public URL
 PUBLIC_URL=$(get_from_zaia ".services[\"$STAGE\"].subdomain")
