@@ -1173,3 +1173,150 @@ production_readiness_check() {
 12. **"Gates ensure success"** - Every phase verified
 
 Remember: This is a template-driven system with **distinct development and production workflows**. Development services are persistent coding environments with manual workflows, while production services are automated deployment targets with full build pipelines. Every operation should be verifiable, every deployment progressive, every failure investigated, and every recovery intelligent. **Trust the tools that work well** - especially safe_bg which handles all aspects of process management internally.
+
+## 🏗️ CORE WORKFLOWS
+
+### **Workflow: Greenfield Service Creation**
+
+```bash
+# 1. Validate service types
+validate_service_type "nodejs@22" || exit 1
+validate_service_type "postgresql@16" || exit 1
+
+# 2. Create services (databases first)
+cat > /tmp/batch.yaml << EOF
+services:
+  - hostname: mydb
+    type: postgresql@16
+    mode: NON_HA
+    priority: 100
+  - hostname: myappdev
+    type: nodejs@22
+    startWithoutCode: true
+    priority: 50
+  - hostname: myapp
+    type: nodejs@22
+    priority: 40
+EOF
+zcli project service-import /tmp/batch.yaml --projectId "$projectId"
+
+# 3. Sync to .zaia (ONLY source)
+sleep 20
+/var/www/init_project.sh
+
+# 4. Show available environment variables
+get_available_envs myappdev
+get_available_envs myapp
+
+# 5. Create zerops.yml with proper environment variable mapping
+safe_create_remote_file "myappdev" "/var/www/zerops.yml" "$(cat << 'EOF'
+zerops:
+  - setup: myapp
+    build:
+      base: nodejs@22
+      buildCommands:
+        - npm install
+        - npm run build
+      deployFiles:
+        - ./dist
+        - ./node_modules
+        - ./package.json
+    run:
+      base: nodejs@22
+      ports:
+        - port: 3000
+          httpSupport: true
+      envVariables:
+        NODE_ENV: production
+        DATABASE_URL: ${mydb_connectionString}
+      start: npm run start:prod
+
+  - setup: myappdev
+    build:
+      base: nodejs@22
+      os: ubuntu
+      buildCommands:
+        - npm install
+      deployFiles:
+        - ./
+    run:
+      base: nodejs@22
+      os: ubuntu
+      prepareCommands:
+        - curl -fsSL https://code-server.dev/install.sh | sh -s -- -y
+      envVariables:
+        NODE_ENV: development
+        DATABASE_URL: ${mydb_connectionString}
+      start: code-server --auth none --bind-addr 0.0.0.0:8080 /var/www
+EOF
+)"
+
+# 6. Install dependencies
+safe_ssh "myappdev" "cd /var/www && npm install"
+safe_ssh "myappdev" "sudo chown -R zerops:zerops /var/www/"
+
+# 7. Intelligent restart (only when needed)
+for service in myapp myappdev; do
+    if [ "$(needs_environment_restart "$service" "mydb")" = "true" ]; then
+        restart_service_for_envs "$service" "needs mydb variables"
+    fi
+done
+
+# 8. Test development server
+safe_bg "myappdev" "npm run dev" "/var/www" "node"
+sleep 5
+curl -f "http://myappdev:3000/health" && echo "✅ Dev server running"
+
+# 9. Deploy to stage
+/var/www/deploy.sh myappdev
+```
+
+### **Workflow: Development with Code-Server**
+
+For development environments, code-server should be configured in the zerops.yml:
+
+```yaml
+zerops:
+  - setup: myappdev
+    build:
+      base: nodejs@22
+      os: ubuntu
+      buildCommands:
+        - npm install
+      deployFiles:
+        - ./
+    run:
+      base: nodejs@22
+      os: ubuntu
+      prepareCommands:
+        - curl -fsSL https://code-server.dev/install.sh | sh -s -- -y
+      ports:
+        - port: 8080
+          httpSupport: true
+      envVariables:
+        NODE_ENV: development
+      start: code-server --auth none --bind-addr 0.0.0.0:8080 /var/www
+```
+
+**Usage**:
+1. Deploy the configuration: `safe_ssh "myappdev" "cd /var/www && zcli push --serviceId $(get_service_id myappdev)"`
+2. Enable subdomain: `ensure_subdomain myappdev`
+3. Access at: `https://<subdomain>.app.zerops.io`
+
+### **Workflow: Deploy Script Fix for Stage Services**
+
+**CRITICAL**: Stage services cannot be accessed via SSH - they are production runtime containers. The deploy script should:
+
+1. **Deploy FROM dev service**: `zcli push` runs on dev service
+2. **Verify stage service**: Use `zcli service log` and wait functions
+3. **Never SSH to stage**: Stage verification must use zcli commands only
+
+```bash
+# ✅ CORRECT - Deploy from dev, verify via zcli
+safe_ssh "$dev_service" "cd /var/www && zcli push --serviceId $stage_id"
+wait_for_deployment_active "$stage_id"
+zcli service log "$stage_service" --limit 10
+
+# ❌ WRONG - Cannot SSH to stage service  
+safe_ssh "$stage_service" "curl localhost:3000"  # This fails!
+```

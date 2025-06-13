@@ -298,24 +298,18 @@ echo "════════════════════════�
 echo "PHASE 7: POST-DEPLOYMENT VERIFICATION"
 echo "═══════════════════════════════════════════════════════════"
 
-# Check deployment status
-if ! check_deployment_status "$STAGE"; then
-    echo "❌ Deployment verification failed"
+# Wait for deployment to be active
+echo "⏳ Waiting for deployment to be active..."
+if ! wait_for_deployment_active "$STAGE_ID"; then
+    echo "❌ Deployment failed to become active"
     exit 1
 fi
 
-# Verify environment variables
+# Check service via zcli logs (stage services can't be SSH'ed into)
 echo ""
-echo "🔍 Verifying environment variables..."
-if ! safe_ssh "$STAGE" "[ -n \"\$NODE_ENV\" -o -n \"\$PYTHONPATH\" -o -n \"\$APP_ENV\" ]" 2>/dev/null; then
-    echo "⚠️ Environment variables may not be active"
-fi
-
-# Health check
-echo ""
-echo "🏥 Running health check..."
-PORT=$(safe_ssh "$STAGE" "echo \$PORT" 2>/dev/null || echo "3000")
-check_application_health "$STAGE" "$PORT" || echo "⚠️ Health check failed"
+echo "🏥 Checking service via zcli logs..."
+echo "Recent logs from $STAGE:"
+zcli service log "$STAGE" --limit 10 || echo "⚠️ Could not retrieve logs"
 
 # Enable subdomain if needed
 echo ""
@@ -334,8 +328,8 @@ if [ -n "$PUBLIC_URL" ] && [ "$PUBLIC_URL" != "null" ]; then
     echo "✅ DEPLOYMENT SUCCESSFUL!"
     echo "🌐 Public URL: https://$PUBLIC_URL"
 
-    # Run frontend diagnostics if applicable
-    if [[ "$TECH" == "javascript" ]] && safe_ssh "$STAGE" "test -d /var/www/public -o -d /var/www/dist -o -d /var/www/build" 2>/dev/null; then
+    # Run frontend diagnostics if applicable (use public URL since we can't SSH to stage)
+    if [[ "$TECH" == "javascript" ]]; then
         echo ""
         echo "🔍 Running frontend diagnostics..."
         /var/www/diagnose_frontend.sh "https://$PUBLIC_URL" --check-console --check-network || true
