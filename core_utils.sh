@@ -188,10 +188,19 @@ deploy_with_monitoring() {
 
     # Execute deployment directly without capturing output (let it stream)
     if safe_ssh "$dev_service" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' >/dev/null 2>&1 && zcli push --serviceId '$stage_id'"; then
-        echo "✅ Deployment completed successfully"
-        return 0
+        echo "✅ Deployment command completed successfully"
+        
+        # MANDATORY: Wait for deployment to be fully active before proceeding
+        echo "⏳ Waiting for deployment to be fully active..."
+        if wait_for_deployment_active "$stage_id"; then
+            echo "✅ Deployment is now active and ready"
+            return 0
+        else
+            echo "❌ Deployment failed to become active"
+            return 1
+        fi
     else
-        echo "❌ Deployment failed"
+        echo "❌ Deployment command failed"
         return 1
     fi
 }
@@ -1307,7 +1316,23 @@ validate_dev_service_config() {
             return 1
         fi
         
-        echo "✅ Development service configuration valid - includes code-server"
+        # CRITICAL: Check for PORT environment variable conflict
+        if echo "$config" | grep -q "PORT:"; then
+            echo "❌ ARCHITECTURE VIOLATION: PORT environment variable set in development service"
+            echo "📋 PROBLEM: PORT conflicts with code-server, application should default to 3000"
+            echo "🚫 REMOVE: PORT environment variable from development services"
+            echo "✅ CORRECT: Let application default to port 3000, code-server uses 8080"
+            return 1
+        fi
+        
+        # Check that both ports are defined (8080 for code-server, 3000 for app)
+        if ! echo "$config" | grep -q "port: 3000"; then
+            echo "❌ ARCHITECTURE VIOLATION: Missing port 3000 for application"
+            echo "📋 REQUIRED: Port 3000 for application (public access)"
+            return 1
+        fi
+        
+        echo "✅ Development service configuration valid - includes code-server with proper port isolation"
     fi
     
     return 0
@@ -1464,8 +1489,33 @@ auto_create_workflow_todos() {
     create_workflow_todos "$base_name" "$tech_stack" "$description"
 }
 
+# Prevent premature actions during deployment
+check_deployment_readiness() {
+    local service="$1"
+    local action_description="$2"
+    
+    echo "🔍 Checking if $service is ready for: $action_description"
+    
+    # Check if this is a development service that was recently deployed
+    if echo "$service" | grep -q "dev"; then
+        local service_id=$(get_service_id "$service")
+        
+        # Simple check - try to verify deployment is stable
+        if ! wait_for_deployment_active "$service_id"; then
+            echo "⚠️ DEPLOYMENT STILL IN PROGRESS"
+            echo "📋 Cannot $action_description while deployment is active"
+            echo "💡 Wait for deployment to complete before proceeding"
+            return 1
+        fi
+    fi
+    
+    echo "✅ Service ready for: $action_description"
+    return 0
+}
+
 export -f safe_output safe_ssh safe_bg get_from_zaia get_service_id validate_dev_service_config
 export -f create_workflow_todos auto_create_workflow_todos validate_workflow_complete detect_premature_success
+export -f check_deployment_readiness
 export -f get_available_envs suggest_env_vars needs_restart restart_service_for_envs
 export -f apply_workaround can_ssh has_live_reload monitor_reload
 export -f check_application_health diagnose_issue diagnose_502_enhanced

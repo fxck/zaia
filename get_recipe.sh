@@ -75,18 +75,27 @@ zerops:
   - setup: apidev
     build:
       base: nodejs@22
+      os: ubuntu
       buildCommands:
-        - npm ci
-        - npm run build
+        - npm install
+      deployFiles:
+        - ./
     run:
       base: nodejs@22
+      os: ubuntu
+      prepareCommands:
+        - curl -fsSL https://code-server.dev/install.sh | sh -s -- --method=standalone
+        - sudo chown -R zerops:zerops /home/zerops/.local/bin/code-server
       ports:
-        - port: 3000
+        - port: 8080                    # Code-server (VPN access only)
+        - port: 3000                    # Dev server (can be shared publicly)
           httpSupport: true
       envVariables:
-        PORT: 3000
         NODE_ENV: development
-      start: npm run dev
+        DATABASE_URL: ${db_connectionString}
+        # CRITICAL: NO PORT environment variable in dev services
+        # Application will default to port 3000, code-server uses 8080
+      start: code-server --auth none --bind-addr 0.0.0.0:8080 /var/www
   - setup: api
     build:
       base: nodejs@22
@@ -94,6 +103,10 @@ zerops:
         - npm ci --production=false
         - npm run build
         - npm prune --production
+      deployFiles:
+        - ./dist
+        - ./node_modules
+        - ./package.json
     run:
       base: nodejs@22
       ports:
@@ -102,7 +115,12 @@ zerops:
       envVariables:
         PORT: 3000
         NODE_ENV: production
+        DATABASE_URL: ${db_connectionString}
       start: node dist/index.js
+      healthCheck:
+        httpGet:
+          port: 3000
+          path: /health
 
 💡 Save the above configurations to files and import them.
 EOF

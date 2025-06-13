@@ -372,16 +372,17 @@ EOF
     wait_for_service_ready "$hostname"
 
     # Generate appropriate zerops.yml
-    local build_cmds deploy_files start_cmd health_check
+    local build_cmds deploy_files start_cmd health_check env_vars
 
     if [ "$role" = "dev" ]; then
-        # Development: minimal build, full source
+        # Development: minimal build, full source, NO PORT env var (conflicts with code-server)
         build_cmds=$(apply_tech_pattern "install" "$tech")
         deploy_files="- ./"
-        start_cmd="# NO START - manual development"
+        start_cmd="start: code-server --auth none --bind-addr 0.0.0.0:8080 /var/www"
         health_check=""
+        env_vars="NODE_ENV: development"
     else
-        # Production: full build, optimized
+        # Production: full build, optimized, WITH PORT env var
         build_cmds=$(apply_tech_pattern "build" "$tech")
         deploy_files="- ./dist\n        - ./node_modules\n        - ./package.json"
         start_cmd="start: $(apply_tech_pattern 'start' '$tech')"
@@ -389,14 +390,17 @@ EOF
         httpGet:
           port: 3000
           path: /health"
+        env_vars="NODE_ENV: production\n        PORT: 3000"
     fi
 
-    # Create zerops.yml
-    local ZEROPS_CONFIG="zerops:
+    # Create zerops.yml with role-specific configuration
+    if [ "$role" = "dev" ]; then
+        # Development service with code-server and port isolation
+        local ZEROPS_CONFIG="zerops:
   - setup: $hostname
     build:
       base: $tech
-      ${role:+os: ubuntu}  # Add OS for dev only
+      os: ubuntu
       buildCommands:
         - $build_cmds
       deployFiles:
@@ -407,15 +411,41 @@ EOF
         - __pycache__
     run:
       base: $tech
-      ${role:+os: ubuntu}
+      os: ubuntu
+      prepareCommands:
+        - curl -fsSL https://code-server.dev/install.sh | sh -s -- --method=standalone
+        - sudo chown -R zerops:zerops /home/zerops/.local/bin/code-server
+      ports:
+        - port: 8080                    # Code-server (VPN access only)
+        - port: 3000                    # Dev server (can be shared publicly)
+          httpSupport: true
+      envVariables:
+        $env_vars
+      $start_cmd"
+    else
+        # Production service
+        local ZEROPS_CONFIG="zerops:
+  - setup: $hostname
+    build:
+      base: $tech
+      buildCommands:
+        - $build_cmds
+      deployFiles:
+        $deploy_files
+      cache:
+        - node_modules
+        - vendor
+        - __pycache__
+    run:
+      base: $tech
       ports:
         - port: 3000
           httpSupport: true
       envVariables:
-        NODE_ENV: ${role:-production}
-        PORT: 3000
+        $env_vars
       $start_cmd
       $health_check"
+    fi
 
     safe_create_remote_file "$hostname" "/var/www/zerops.yml" "$ZEROPS_CONFIG"
 
@@ -1296,6 +1326,32 @@ echo "🌐 Code-server accessible at: https://$PUBLIC_URL"
 3. Fixes permissions for zerops user
 4. Sets proper port binding to 0.0.0.0:8080
 5. Uses `start` command to auto-launch code-server
+
+**🚨 CRITICAL: Port Isolation (Prevents Application Hijacking)**
+
+Development services use TWO ports with strict isolation:
+- **Port 8080**: Code-server (VPN access only) - NEVER set PORT environment variable
+- **Port 3000**: Application (can be shared publicly) - application defaults to 3000
+
+```bash
+# ❌ WRONG - PORT environment variable conflicts with code-server
+envVariables:
+  NODE_ENV: development
+  PORT: 3000              # This hijacks application and conflicts with code-server
+
+# ✅ CORRECT - No PORT environment variable, application defaults to 3000
+envVariables:
+  NODE_ENV: development
+  # NO PORT variable - let application default to 3000
+```
+
+**Why PORT conflicts occur:**
+1. Code-server runs on 8080 (set in start command)
+2. Application should default to 3000 (in application code: `process.env.PORT || 3000`)
+3. If PORT=3000 is set as env var, it can interfere with port bindings
+4. Manual `export PORT=3000` in SSH sessions creates conflicts
+
+**The solution**: Development services NEVER set PORT environment variable.
 
 **Alternative: Manual installation if prepareCommands fails:**
 
