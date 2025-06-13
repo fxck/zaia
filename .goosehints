@@ -1168,7 +1168,8 @@ maxContainers: 10
 
 # Deployment
 /var/www/deploy.sh <dev-service>        # Dev to stage deployment
-[S] safe_ssh <dev-service> "cd /var/www && zcli push --serviceId $DEV_ID --deploy-git-folder"  # Dev self-deployment
+[Z] deploy_self <dev-service>           # Dev self-deployment (activate config changes)
+[S] safe_ssh <dev-service> "cd /var/www && zcli push --serviceId $DEV_ID --deploy-git-folder"  # Manual alternative
 
 # Manual development workflow
 ssh zerops@<dev-service>                # Access dev environment

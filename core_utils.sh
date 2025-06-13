@@ -179,6 +179,38 @@ monitor_zcli_build() {
     return 1
 }
 
+# Deploy service to itself (for config updates, env var activation)
+deploy_self() {
+    local service="$1"
+    
+    echo "🔄 Deploying $service to itself (activating configuration changes)..."
+    
+    local service_id=$(get_service_id "$service")
+    echo "📋 Service ID: $service_id"
+    
+    # Create a unique version name to track this deployment
+    local version_name="deploy-$(date +%Y%m%d-%H%M%S)"
+    echo "📋 Version name: $version_name"
+    
+    # Execute deployment with version tracking
+    if safe_ssh "$service" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' >/dev/null 2>&1 && zcli push --serviceId '$service_id' --deploy-git-folder --version-name '$version_name'"; then
+        echo "✅ Self-deployment command completed successfully"
+        
+        # MANDATORY: Wait for deployment to be fully active using API
+        echo "⏳ Waiting for deployment to be fully active..."
+        if wait_for_version_active "$service_id" "$version_name"; then
+            echo "✅ Deployment is now active and ready"
+            return 0
+        else
+            echo "❌ Deployment failed to become active"
+            return 1
+        fi
+    else
+        echo "❌ Self-deployment command failed"
+        return 1
+    fi
+}
+
 # Wrapper for deployment with monitoring
 deploy_with_monitoring() {
     local dev_service="$1"
@@ -269,10 +301,75 @@ is_service_building() {
     fi
 }
 
+# Wait for specific version to become active using REST API
+wait_for_version_active() {
+    local service_id="$1"
+    local expected_version="$2"
+    
+    echo "⏳ Waiting for version '$expected_version' to become active..."
+    
+    local max_wait=600  # 10 minutes total (build + container startup)
+    local elapsed=0
+    local api_url="https://api.app-prg1.zerops.io/api/rest/public/service-stack/$service_id"
+    
+    while [ $elapsed -lt $max_wait ]; do
+        # Query the service stack API
+        local response=$(curl -sf -H "Authorization: Bearer $ZEROPS_ACCESS_TOKEN" "$api_url" 2>/dev/null || echo '{}')
+        
+        if [ -n "$response" ] && [ "$response" != '{}' ]; then
+            # Extract current version number and status
+            local current_version=$(echo "$response" | jq -r '.versionNumber // "unknown"' 2>/dev/null || echo "unknown")
+            local status=$(echo "$response" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown") 
+            local active_version=$(echo "$response" | jq -r '.activeAppVersion.id // "none"' 2>/dev/null || echo "none")
+            
+            echo "📍 Status: $status, Version: $current_version, Active: $active_version (${elapsed}s elapsed)"
+            
+            # Check if our version is active
+            if [ "$current_version" = "$expected_version" ] && [ "$status" = "READY" ]; then
+                echo "✅ Version '$expected_version' is now active and ready"
+                return 0
+            elif [ "$current_version" = "$expected_version" ] && [ "$status" = "RUNNING" ]; then
+                echo "✅ Version '$expected_version' is running and active"
+                return 0
+            elif [ "$status" = "FAILED" ] || [ "$status" = "ERROR" ]; then
+                echo "❌ Deployment failed with status: $status"
+                return 1
+            else
+                # Still building/deploying
+                printf "."
+            fi
+        else
+            echo "⚠️ Failed to query service API"
+            printf "."
+        fi
+        
+        sleep 15
+        elapsed=$((elapsed + 15))
+    done
+    
+    echo ""
+    echo "⚠️ Timeout after ${max_wait}s waiting for version '$expected_version'"
+    echo "📋 Final service state:"
+    
+    # Show final state for debugging
+    local final_response=$(curl -sf -H "Authorization: Bearer $ZEROPS_ACCESS_TOKEN" "$api_url" 2>/dev/null || echo '{}')
+    if [ -n "$final_response" ] && [ "$final_response" != '{}' ]; then
+        local final_version=$(echo "$final_response" | jq -r '.versionNumber // "unknown"' 2>/dev/null || echo "unknown")
+        local final_status=$(echo "$final_response" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown")
+        echo "  Version: $final_version"
+        echo "  Status: $final_status"
+    else
+        echo "  Unable to query final state"
+    fi
+    
+    return 1
+}
+
+# Legacy function - kept for compatibility
 wait_for_deployment_active() {
     local service_id="$1"
     
-    echo "⏳ Waiting for deployment to be active..."
+    echo "⏳ Waiting for deployment to be active (using legacy method)..."
     
     # First check if there are active builds using build logs
     if is_service_building "$service_id"; then
@@ -1764,5 +1861,5 @@ export -f zaia_exec verify_check get_development_service deployment_exists
 export -f ensure_subdomain ensure_subdomain_verified verify_service_exists verify_git_state verify_build_success
 export -f check_deployment_status verify_health generate_service_yaml
 export -f safe_create_remote_file validate_remote_file_content
-export -f monitor_zcli_build deploy_with_monitoring
-export -f wait_for_condition wait_for_service_ready is_service_building wait_for_deployment_active
+export -f monitor_zcli_build deploy_self deploy_with_monitoring
+export -f wait_for_condition wait_for_service_ready is_service_building wait_for_version_active wait_for_deployment_active
