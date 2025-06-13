@@ -195,7 +195,9 @@ deploy_self() {
     echo "📋 Unique version: $version_name"
     
     # Execute deployment with version tracking
-    if safe_ssh "$service" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' >/dev/null 2>&1 && zcli push --serviceId '$service_id' --deploy-git-folder --version-name '$version_name'"; then
+    echo "🔍 Executing: zcli push --serviceId '$service_id' --deploy-git-folder --version-name '$version_name'"
+    
+    if safe_ssh "$service" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' >/dev/null 2>&1 && echo 'zcli login successful' && zcli push --serviceId '$service_id' --deploy-git-folder --version-name '$version_name'"; then
         echo "✅ Self-deployment command completed successfully"
         
         # MANDATORY: Wait for THIS SPECIFIC version to be active
@@ -208,7 +210,10 @@ deploy_self() {
             return 1
         fi
     else
-        echo "❌ Self-deployment command failed"
+        local exit_code=$?
+        echo "❌ Self-deployment command failed with exit code: $exit_code"
+        echo "🔍 Debugging deployment failure..."
+        safe_ssh "$service" "cd /var/www && pwd && ls -la && git status" 100 10
         return 1
     fi
 }
@@ -226,7 +231,9 @@ deploy_with_monitoring() {
     echo "📋 Unique version: $version_name"
 
     # Execute deployment with explicit version tracking
-    if safe_ssh "$dev_service" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' >/dev/null 2>&1 && zcli push --serviceId '$stage_id' --deploy-git-folder --version-name '$version_name'"; then
+    echo "🔍 Executing: zcli push --serviceId '$stage_id' --deploy-git-folder --version-name '$version_name'"
+    
+    if safe_ssh "$dev_service" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' >/dev/null 2>&1 && echo 'zcli login successful' && zcli push --serviceId '$stage_id' --deploy-git-folder --version-name '$version_name'"; then
         echo "✅ Deployment command sent with version: $version_name"
         
         # MANDATORY: Wait for THIS SPECIFIC version to be active
@@ -239,7 +246,10 @@ deploy_with_monitoring() {
             return 1
         fi
     else
-        echo "❌ Deployment command failed"
+        local exit_code=$?
+        echo "❌ Deployment command failed with exit code: $exit_code"
+        echo "🔍 Debugging deployment failure..."
+        safe_ssh "$dev_service" "cd /var/www && pwd && ls -la && git status" 100 10
         return 1
     fi
 }
