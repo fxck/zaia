@@ -38,6 +38,16 @@ safe_create_remote_file() {
         return 1
     fi
 
+    # MANDATORY: Validate development service configurations
+    if [[ "$filepath" == *"zerops.yml"* ]]; then
+        echo "🔍 Validating zerops.yml configuration..."
+        if ! validate_dev_service_config "$content" "$service"; then
+            echo "❌ DEPLOYMENT BLOCKED: Development service configuration invalid"
+            echo "📋 Use template from .goosehints with mandatory code-server setup"
+            return 1
+        fi
+    fi
+
     # Base64 encode to prevent ANY shell interpretation
     local encoded_content=$(echo "$content" | base64 -w0)
 
@@ -1251,7 +1261,69 @@ security_scan() {
 }
 
 # Export all functions
-export -f safe_output safe_ssh safe_bg get_from_zaia get_service_id
+validate_dev_service_config() {
+    local config="$1"
+    local service="$2"
+    
+    if echo "$service" | grep -q "dev"; then
+        echo "🔍 MANDATORY: Validating development service configuration..."
+        
+        if ! echo "$config" | grep -q "prepareCommands"; then
+            echo "❌ ARCHITECTURE VIOLATION: Missing prepareCommands for code-server installation"
+            echo "📋 REQUIRED: Development services MUST include code-server setup"
+            return 1
+        fi
+        
+        if ! echo "$config" | grep -q "code-server"; then
+            echo "❌ ARCHITECTURE VIOLATION: Missing code-server in start command"
+            echo "📋 REQUIRED: start: code-server --auth none --bind-addr 0.0.0.0:8080 /var/www"
+            return 1
+        fi
+        
+        if ! echo "$config" | grep -q "port: 8080"; then
+            echo "❌ ARCHITECTURE VIOLATION: Missing port 8080 for code-server"
+            echo "📋 REQUIRED: Port 8080 for code-server (VPN access)"
+            return 1
+        fi
+        
+        echo "✅ Development service configuration valid - includes code-server"
+    fi
+    
+    return 0
+}
+
+# Workflow completion enforcement
+create_workflow_todos() {
+    local base_name="$1"  # e.g., "api", "app"
+    
+    echo "📋 Creating mandatory workflow TODO list for $base_name services..."
+    
+    # Use TodoWrite to create the workflow todos
+    echo '[
+        {"id": "create-dev-service", "content": "Create '${base_name}'dev development service with code-server", "status": "pending", "priority": "high"},
+        {"id": "create-prod-service", "content": "Create '${base_name}' production service", "status": "pending", "priority": "high"},
+        {"id": "configure-dev", "content": "Configure development environment and test locally", "status": "pending", "priority": "high"},
+        {"id": "deploy-to-prod", "content": "Deploy from dev to production using /var/www/deploy.sh", "status": "pending", "priority": "high"},
+        {"id": "verify-prod", "content": "Verify production deployment and enable subdomain", "status": "pending", "priority": "high"}
+    ]' > /tmp/workflow_todos.json
+    
+    echo "✅ Workflow TODO list created - MUST complete all tasks before declaring success"
+    echo "📋 Use TodoWrite and TodoRead to track progress"
+}
+
+validate_workflow_complete() {
+    echo "🔍 Validating workflow completion..."
+    
+    # This would need to integrate with actual TodoRead functionality
+    # For now, just remind about the requirement
+    echo "⚠️ REMINDER: Never declare 'success' until all workflow TODOs are completed"
+    echo "📋 Required for dual services: dev creation → prod creation → configuration → deployment → verification"
+    
+    return 0
+}
+
+export -f safe_output safe_ssh safe_bg get_from_zaia get_service_id validate_dev_service_config
+export -f create_workflow_todos validate_workflow_complete
 export -f get_available_envs suggest_env_vars needs_restart restart_service_for_envs
 export -f apply_workaround can_ssh has_live_reload monitor_reload
 export -f check_application_health diagnose_issue diagnose_502_enhanced

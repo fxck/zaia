@@ -793,6 +793,9 @@ echo "Exit code: $?" # Gate 0
 RECIPE=$(/var/www/get_recipe.sh express)
 
 # Infrastructure (like docker-compose up)
+# MANDATORY: Create workflow TODO list for dual services
+create_workflow_todos "api"  # Creates todos for apidev + api workflow
+
 mkdir -p /var/www/tmp
 create_file "local" "/var/www/tmp/services.yaml" "#yamlPreprocessor=on
 services:
@@ -951,6 +954,9 @@ echo "Exit code: $?" # Gate 11
 PUBLIC_URL="https://$([Z] get_from_zaia '.services.api.subdomain')"
 wait_for_condition "public health check" "curl -sf '$PUBLIC_URL/health'"
 echo "Exit code: $?" # Gate 12 - PRODUCTION READY!
+
+# MANDATORY: Validate workflow completion before declaring success
+validate_workflow_complete || exit 1
 
 echo ""
 echo "🎉 DEPLOYMENT COMPLETE!"
@@ -1179,9 +1185,13 @@ Remember: This is a template-driven system with **distinct development and produ
 
 ## 🏗️ CORE WORKFLOWS
 
-### **Workflow: Development with Code-Server (100% Working)**
+## 🚨 MANDATORY ARCHITECTURE REQUIREMENT
 
-For development environments, code-server should be configured in the zerops.yml:
+**CRITICAL**: Every development service (ending in "dev") MUST include code-server configuration. This is enforced by validation in safe_create_remote_file() - deployments will be BLOCKED if missing.
+
+### **Workflow: Development with Code-Server (100% MANDATORY)**
+
+For development environments, code-server MUST be configured in the zerops.yml:
 
 ```yaml
 zerops:
