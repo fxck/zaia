@@ -114,12 +114,12 @@ validate_remote_file_content() {
     return 0
 }
 
-# Monitor build status with active polling
+# Monitor build status with active polling - NEVER ASSUME SUCCESS
 monitor_zcli_build() {
     local build_output="$1"
 
     # Check if the output indicates success/failure directly
-    if echo "$build_output" | grep -q "successfully"; then
+    if echo "$build_output" | grep -q "successfully\|DEPLOYED"; then
         echo "✅ Build completed successfully"
         return 0
     fi
@@ -133,9 +133,10 @@ monitor_zcli_build() {
     local build_id=$(echo "$build_output" | grep -oE 'build[/-]([a-zA-Z0-9-]+)' | grep -oE '[a-zA-Z0-9-]+$' | head -1)
 
     if [ -z "$build_id" ]; then
-        echo "⚠️ Could not extract build ID from output, assuming success" >&2
+        echo "❌ CRITICAL: Cannot extract build ID from output" >&2
         echo "Build output was: $build_output" >&2
-        return 0
+        echo "This indicates a platform issue or unexpected output format" >&2
+        return 1  # FAIL - never assume success
     fi
 
     echo "📊 Monitoring build: $build_id"
@@ -179,7 +180,7 @@ monitor_zcli_build() {
     return 1
 }
 
-# Deploy service to itself (for config updates, env var activation)
+# Deploy service to itself with unique tracking
 deploy_self() {
     local service="$1"
     
@@ -188,21 +189,21 @@ deploy_self() {
     local service_id=$(get_service_id "$service")
     echo "📋 Service ID: $service_id"
     
-    # Create a unique version name to track this deployment
-    local version_name="deploy-$(date +%Y%m%d-%H%M%S)"
-    echo "📋 Version name: $version_name"
+    # Create truly unique version with microseconds + random
+    local version_name="deploy-$(date +%Y%m%d-%H%M%S)-$(date +%N | cut -c1-3)-$(shuf -i 1000-9999 -n1)"
+    echo "📋 Unique version: $version_name"
     
     # Execute deployment with version tracking
     if safe_ssh "$service" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' >/dev/null 2>&1 && zcli push --serviceId '$service_id' --deploy-git-folder --version-name '$version_name'"; then
         echo "✅ Self-deployment command completed successfully"
         
-        # MANDATORY: Wait for deployment to be fully active using API
-        echo "⏳ Waiting for deployment to be fully active..."
+        # MANDATORY: Wait for THIS SPECIFIC version to be active
+        echo "⏳ Waiting for version $version_name to be fully active..."
         if wait_for_version_active "$service_id" "$version_name"; then
-            echo "✅ Deployment is now active and ready"
+            echo "✅ Version $version_name is now active and ready"
             return 0
         else
-            echo "❌ Deployment failed to become active"
+            echo "❌ Version $version_name failed to become active"
             return 1
         fi
     else
@@ -211,24 +212,28 @@ deploy_self() {
     fi
 }
 
-# Wrapper for deployment with monitoring
+# Wrapper for deployment with unique tracking and monitoring
 deploy_with_monitoring() {
     local dev_service="$1"
     local stage_id="$2"
 
     echo "🚀 Deploying from $dev_service to $stage_id..."
 
-    # Execute deployment directly without capturing output (let it stream)
-    if safe_ssh "$dev_service" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' >/dev/null 2>&1 && zcli push --serviceId '$stage_id' --deploy-git-folder"; then
-        echo "✅ Deployment command completed successfully"
+    # Create truly unique version with microseconds + random
+    local version_name="deploy-$(date +%Y%m%d-%H%M%S)-$(date +%N | cut -c1-3)-$(shuf -i 1000-9999 -n1)"
+    echo "📋 Unique version: $version_name"
+
+    # Execute deployment with explicit version tracking
+    if safe_ssh "$dev_service" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' >/dev/null 2>&1 && zcli push --serviceId '$stage_id' --deploy-git-folder --version-name '$version_name'"; then
+        echo "✅ Deployment command sent with version: $version_name"
         
-        # MANDATORY: Wait for deployment to be fully active before proceeding
-        echo "⏳ Waiting for deployment to be fully active..."
-        if wait_for_deployment_active "$stage_id"; then
-            echo "✅ Deployment is now active and ready"
+        # MANDATORY: Wait for THIS SPECIFIC version to be active
+        echo "⏳ Waiting for version $version_name to be fully active..."
+        if wait_for_version_active "$stage_id" "$version_name"; then
+            echo "✅ Version $version_name confirmed active and ready"
             return 0
         else
-            echo "❌ Deployment failed to become active"
+            echo "❌ Version $version_name failed to become active"
             return 1
         fi
     else
@@ -760,7 +765,117 @@ show_env_safe() {
     safe_ssh "$service" "env | sort" 50 10 | mask_sensitive_output
 }
 
-# Safe backgrounding pattern with verification
+# Process management with proper verification and clean slate
+start_application_properly() {
+    local service="$1"
+    local start_cmd="$2"
+    local port="$3"
+    local work_dir="${4:-/var/www}"
+
+    echo "🚀 Starting application with proper verification..."
+
+    if ! can_ssh "$service"; then
+        echo "❌ Cannot start process on $service (managed service)" >&2
+        return 1
+    fi
+
+    # 1. Clean slate - kill any existing processes
+    safe_ssh "$service" "pkill -f '$start_cmd' || true" 5 5
+    sleep 2
+
+    # 2. Start with background monitoring
+    echo "🚀 Starting: $start_cmd"
+    if timeout 15 ssh -o ConnectTimeout=10 "zerops@$service" \
+        "cd $work_dir && nohup $start_cmd > app.log 2>&1 < /dev/null &"; then
+        echo "✅ Command sent successfully"
+    else
+        local exit_code=$?
+        if [ $exit_code -eq 124 ]; then
+            echo "⚠️ Timeout (expected for backgrounding)"
+        else
+            echo "❌ Failed to send command (exit code: $exit_code)"
+            return 1
+        fi
+    fi
+
+    # 3. Wait for startup with specific checks
+    local attempts=0
+    while [ $attempts -lt 12 ]; do  # 60 seconds total
+        if check_specific_application "$service" "$start_cmd" "$port"; then
+            echo "✅ Application started and verified"
+            return 0
+        fi
+        
+        echo "⏳ Waiting for application startup... (attempt $((attempts + 1))/12)"
+        sleep 5
+        attempts=$((attempts + 1))
+    done
+    
+    echo "❌ Application failed to start properly"
+    echo "📋 Diagnostics:"
+    safe_ssh "$service" "ps aux | grep -v grep" 10 5
+    safe_ssh "$service" "ss -tlnp" 10 5
+    safe_ssh "$service" "tail -50 $work_dir/app.log" 50 5
+    return 1
+}
+
+# Multi-signal deployment verification
+verify_deployment_complete() {
+    local service="$1"
+    local expected_version="$2"
+    local expected_cmd="$3"
+    local expected_port="$4"
+    
+    echo "🔍 Multi-signal deployment verification..."
+    
+    if ! can_ssh "$service"; then
+        echo "⚠️ Cannot verify managed service via SSH - using API only"
+        # For managed services, just check API
+        local service_id=$(get_service_id "$service")
+        local api_url="https://api.app-prg1.zerops.io/api/rest/public/service-stack/$service_id"
+        local response=$(curl -sf -H "Authorization: Bearer $ZEROPS_ACCESS_TOKEN" "$api_url" 2>/dev/null || echo '{}')
+        
+        if [ -n "$response" ] && [ "$response" != '{}' ]; then
+            local current_version=$(echo "$response" | jq -r '.versionNumber // "unknown"' 2>/dev/null || echo "unknown")
+            local status=$(echo "$response" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown")
+            
+            if [ "$current_version" = "$expected_version" ] && [[ "$status" =~ ^(READY|RUNNING)$ ]]; then
+                echo "✅ Managed service deployment verified via API"
+                return 0
+            fi
+        fi
+        echo "❌ Managed service verification failed"
+        return 1
+    fi
+    
+    # Signal 1: Build logs show successful completion
+    if ! zcli service log "$service" --show-build-logs --limit 10 2>/dev/null | grep -q "DEPLOYED\\|SUCCESS"; then
+        echo "❌ Build logs don't show successful deployment"
+        return 1
+    fi
+    
+    # Signal 2: Specific application process is running (if cmd and port provided)
+    if [ -n "$expected_cmd" ] && [ -n "$expected_port" ]; then
+        if ! check_specific_application "$service" "$expected_cmd" "$expected_port"; then
+            echo "❌ Application health check failed"
+            return 1
+        fi
+    fi
+    
+    # Signal 3: Recent log activity (not stale)
+    local last_log_time=$(zcli service log "$service" --limit 1 --format JSON 2>/dev/null | jq -r '.[0].timestamp // empty' 2>/dev/null || echo "")
+    if [ -n "$last_log_time" ]; then
+        local log_age=$(( $(date +%s) - $(date -d "$last_log_time" +%s 2>/dev/null || echo 0) ))
+        if [ $log_age -gt 300 ]; then  # 5 minutes
+            echo "⚠️ Last log is $log_age seconds old - might be stale"
+        fi
+    fi
+    
+    echo "✅ All signals confirm successful deployment"
+    return 0
+}
+
+# Safe backgrounding pattern with verification (legacy - use start_application_properly)
 safe_bg() {
     local service="$1"
     local start_cmd="$2"
@@ -1024,7 +1139,7 @@ apply_workaround() {
     echo "🔧 Applying StartWithoutCode workaround for $service..."
 
     for i in $(seq 1 $max_retries); do
-        if timeout 15 ssh -o ConnectTimeout=10 "zerops@$service" "zsc setSecretEnv foo bar" 2>/dev/null; then
+        if timeout 5 ssh -o ConnectTimeout=5 "zerops@$service" "zsc setSecretEnv foo bar" 2>/dev/null; then
             echo "✅ Workaround applied successfully"
             return 0
         fi
@@ -1095,7 +1210,51 @@ monitor_reload() {
     fi
 }
 
-# Application health check
+# Specific application verification with multi-signal correlation
+check_specific_application() {
+    local service="$1"
+    local expected_cmd="$2"    # e.g., "node index.js"
+    local expected_port="$3"   # e.g., 3000
+
+    echo "🔍 Checking specific application: $expected_cmd on port $expected_port"
+
+    if ! can_ssh "$service"; then
+        echo "❌ Cannot check managed service"
+        return 1
+    fi
+
+    # 1. Find exact process
+    local pid=$(safe_ssh "$service" "pgrep -f '$expected_cmd'" 1 5 2>/dev/null | head -1)
+    if [ -z "$pid" ]; then
+        echo "❌ Process not found: $expected_cmd"
+        return 1
+    fi
+
+    # 2. Verify process is actually that command
+    local actual_cmd=$(safe_ssh "$service" "ps -p $pid -o cmd --no-headers" 1 5 2>/dev/null)
+    if [[ "$actual_cmd" != *"$expected_cmd"* ]]; then
+        echo "❌ Process mismatch. Expected: $expected_cmd, Found: $actual_cmd"
+        return 1
+    fi
+
+    # 3. Verify port binding by this specific process
+    local port_owner=$(safe_ssh "$service" "ss -tlnp | grep :$expected_port | grep -o 'pid=[0-9]*' | cut -d= -f2" 1 5 2>/dev/null | head -1)
+    if [ -n "$port_owner" ] && [ "$port_owner" != "$pid" ]; then
+        echo "❌ Port $expected_port not owned by process $pid (owner: $port_owner)"
+        return 1
+    fi
+
+    # 4. Test actual HTTP response
+    if safe_ssh "$service" "curl -sf -m 5 http://localhost:$expected_port/" 1 5 >/dev/null 2>&1; then
+        echo "✅ Application verified: PID $pid, Port $expected_port, HTTP responding"
+        return 0
+    else
+        echo "❌ Process running but HTTP not responding on port $expected_port"
+        return 1
+    fi
+}
+
+# Application health check (legacy - use check_specific_application for better results)
 check_application_health() {
     local service="$1"
     local port="${2:-3000}"
@@ -1854,7 +2013,8 @@ export -f create_workflow_todos auto_create_workflow_todos validate_workflow_com
 export -f check_deployment_readiness
 export -f get_available_envs suggest_env_vars needs_restart restart_service_for_envs
 export -f apply_workaround can_ssh has_live_reload monitor_reload
-export -f check_application_health diagnose_issue diagnose_502_enhanced
+export -f check_application_health check_specific_application start_application_properly verify_deployment_complete
+export -f diagnose_issue diagnose_502_enhanced
 export -f create_safe_yaml validate_service_type validate_service_name get_service_role
 export -f mask_sensitive_output show_env_safe sync_env_to_zaia security_scan
 export -f zaia_exec verify_check get_development_service deployment_exists

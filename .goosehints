@@ -172,40 +172,68 @@ EOF
 safe_create_remote_file "$SERVICE" "/var/www/file.ts" "$(cat /tmp/file.ts)"  # WRONG!
 ```
 
-### 🚨 Process State Awareness
+### 🚨 Process Management (NEVER ASSUME, ALWAYS VERIFY)
 
-**ALWAYS check existing state before starting processes:**
+**CRITICAL**: The old state-aware checking was broken. Use expert verification instead:
 
 ```bash
-# ✅ CORRECT - State-aware process management
-start_process_smart() {
+# ✅ CORRECT - Process management with multi-signal verification
+start_application_properly() {
     local service="$1"
-    local start_cmd="$2"
-    local work_dir="${3:-/var/www}"
-    local pattern="${4:-$start_cmd}"
-
-    # Check if already running
-    if safe_ssh "$service" "pgrep -f '$pattern'" >/dev/null 2>&1; then
-        echo "📋 Process already running, checking health..."
-        safe_ssh "$service" "tail -50 $work_dir/app.log | grep -v '^$'" || true
-
-        # Verify it's healthy
-        if check_application_health "$service"; then
-            echo "✅ Process healthy, no action needed"
+    local start_cmd="$2"     # e.g., "node index.js"
+    local port="$3"          # e.g., 3000
+    
+    echo "🚀 Starting application with proper verification..."
+    
+    # 1. Clean slate - kill any existing processes
+    safe_ssh "$service" "pkill -f '$start_cmd' || true"
+    sleep 2
+    
+    # 2. Start with background monitoring
+    safe_bg "$service" "$start_cmd" "/var/www" "$start_cmd"
+    
+    # 3. Wait for startup with specific checks (60 seconds total)
+    local attempts=0
+    while [ $attempts -lt 12 ]; do
+        if check_specific_application "$service" "$start_cmd" "$port"; then
+            echo "✅ Application started and verified"
             return 0
-        else
-            echo "⚠️ Process unhealthy, restarting..."
-            safe_ssh "$service" "pkill -f '$pattern'" || true
-            sleep 2
         fi
-    fi
-
-    # Start process
-    safe_bg "$service" "$start_cmd" "$work_dir" "$pattern"
+        echo "⏳ Waiting for application startup... (attempt $((attempts + 1))/12)"
+        sleep 5
+        attempts=$((attempts + 1))
+    done
+    
+    echo "❌ Application failed to start properly"
+    return 1
 }
 
-# ❌ WRONG - Blind restart
-safe_bg "$SERVICE" "npm run dev" "/var/www" "npm"
+# Verification checks:
+# - Exact process match (not generic "node")
+# - Port ownership by specific PID
+# - HTTP response verification
+# - Multi-signal correlation
+
+# ❌ WRONG - Generic process checking
+check_application_health "$service" 3000 "node"  # Matches any node process!
+
+# ✅ CORRECT - Specific application verification
+check_specific_application "$service" "node index.js" 3000
+```
+
+**Why the old method was broken:**
+1. **Generic patterns**: `pgrep -f 'node'` matches ANY node process
+2. **No correlation**: Process + port + HTTP response must all match
+3. **Premature success**: Finding old processes and assuming they're the right ones
+4. **No cleanup**: Starting new processes without killing old ones
+
+**Usage Pattern:**
+```bash
+# Start with expert verification
+start_application_properly "apidev" "node index.js" 3000
+
+# Verify deployment with multiple signals
+verify_deployment_complete "api" "$version" "node index.js" 3000
 ```
 
 ### 🚨 Silent Failure Investigation
@@ -492,22 +520,90 @@ intelligent_recovery() {
 }
 ```
 
+## 🚨 Build and Deployment Monitoring
+
+**CRITICAL**: Never assume success when build monitoring fails. Always investigate:
+
+```bash
+# ✅ CORRECT - Build monitoring with unique tracking
+deploy_with_monitoring() {
+    local dev_service="$1"
+    local stage_id="$2"
+    
+    # Create truly unique version with microseconds + random
+    local version_name="deploy-$(date +%Y%m%d-%H%M%S)-$(date +%N | cut -c1-3)-$(shuf -i 1000-9999 -n1)"
+    echo "📋 Unique version: $version_name"
+    
+    # Deploy with explicit version tracking
+    if safe_ssh "$dev_service" "cd /var/www && zcli push --serviceId '$stage_id' --deploy-git-folder --version-name '$version_name'"; then
+        echo "✅ Deploy command sent with version: $version_name"
+        
+        # Wait for THIS SPECIFIC version to be active
+        if wait_for_version_active "$stage_id" "$version_name"; then
+            echo "✅ Version $version_name confirmed active"
+            return 0
+        else
+            echo "❌ Version $version_name failed to activate"
+            return 1
+        fi
+    else
+        return 1
+    fi
+}
+
+# Multi-signal verification for deployments
+verify_deployment_complete() {
+    local service="$1"
+    local expected_version="$2"
+    local expected_cmd="$3"     # e.g., "node index.js"
+    local expected_port="$4"    # e.g., 3000
+    
+    echo "🔍 Multi-signal deployment verification..."
+    
+    # Signal 1: Build logs show successful completion
+    if ! zcli service log "$service" --show-build-logs --limit 10 | grep -q "DEPLOYED\\|SUCCESS"; then
+        echo "❌ Build logs don't show successful deployment"
+        return 1
+    fi
+    
+    # Signal 2: Specific application process is running
+    if [ -n "$expected_cmd" ] && [ -n "$expected_port" ]; then
+        if ! check_specific_application "$service" "$expected_cmd" "$expected_port"; then
+            echo "❌ Application health check failed"
+            return 1
+        fi
+    fi
+    
+    # Signal 3: Recent log activity (not stale)
+    local last_log_time=$(zcli service log "$service" --limit 1 --format JSON | jq -r '.[0].timestamp // empty')
+    if [ -n "$last_log_time" ]; then
+        local log_age=$(( $(date +%s) - $(date -d "$last_log_time" +%s 2>/dev/null || echo 0) ))
+        if [ $log_age -gt 300 ]; then  # 5 minutes
+            echo "⚠️ Last log is $log_age seconds old - might be stale"
+        fi
+    fi
+    
+    echo "✅ All signals confirm successful deployment"
+    return 0
+}
+```
+
 ## 🚨 Rapid Error Recovery Matrix
 
 ```bash
-# ERROR RECOVERY REFERENCE
+# ERROR RECOVERY REFERENCE - EXPERT EDITION
 # Missing module: npm/pip/composer install <module>
-# 502 Gateway: Check process→binding→subdomain with diagnose_502_enhanced
-# Env undefined: Deploy zerops.yml first
-# Build timeout: Use prepareCommands, check build logs via zcli service log --showBuildLogs
-# Type/TS errors: npm install --save-dev @types/node typescript
-# YAML error: yq e '.' file.yaml to validate
-# Empty /var/www: Check deployFiles in zerops.yml
-# CORS errors: Add headers to backend API
-# Port in use: pgrep -f pattern, then fuser -k 3000/tcp
-# Silent deploy fail: zcli service log --showBuildLogs for build failures
-# Subdomain fail: Manual verification via curl
-# Process running: Check logs instead of blind restart
+# 502 Gateway: Use diagnose_502_enhanced with multi-signal verification
+# Env undefined: Deploy zerops.yml first, verify with wait_for_version_active
+# Build timeout: NEVER assume success - investigate build logs immediately
+# Build ID missing: CRITICAL error - never assume success, debug platform output
+# Process not starting: Use start_application_properly with specific commands
+# Generic process match: Replace with check_specific_application
+# Port conflicts: Use APP_PORT not PORT, verify port ownership by PID
+# Stale processes: Clean slate with pkill before starting new processes
+# Version tracking: Use unique timestamps with microseconds + random
+# Silent deploy fail: Multi-signal verification with build logs + API + process check
+# Premature success: Never trust single signals, always correlate multiple data points
 ```
 
 ## 🛠️ Core Functions Reference
@@ -519,20 +615,23 @@ intelligent_recovery() {
 - `get_service_id(service)` - Get service UUID or exit
 - `sync_env_to_zaia()` - Sync environment variables
 
-**SSH & Process**:
+**SSH & Process (EXPERT)**:
 - `safe_ssh(service, cmd, lines, timeout)` - Execute with limits
-- `safe_bg(service, cmd, dir, pattern)` - Start background process
+- `start_application_properly(service, cmd, port)` - Proper process management
+- `safe_bg(service, cmd, dir, pattern)` - Background process (legacy)
 - `safe_create_remote_file(service, path, content)` - Create files safely
 
-**Diagnostics**:
-- `check_application_health(service, port, process)` - Health check
+**Diagnostics (EXPERT)**:
+- `check_specific_application(service, cmd, port)` - Specific verification
+- `check_application_health(service, port, process)` - Legacy health check
+- `verify_deployment_complete(service, version, cmd, port)` - Multi-signal verification
 - `diagnose_502_enhanced(service, port)` - 502 diagnosis
 - `diagnose_issue(service, --smart)` - General diagnostics
 
-**Deployment**:
-- `deploy_with_monitoring(dev, stage_id)` - Deploy with monitoring
+**Deployment (EXPERT)**:
+- `deploy_with_monitoring(dev, stage_id)` - Deploy with unique tracking
 - `ensure_subdomain(service)` - Enable public access
-- `monitor_build_process(service)` - Monitor build progress
+- `monitor_zcli_build(output)` - Never assume success
 
 **Complete Function List**:
 ```bash
@@ -952,20 +1051,14 @@ EOF
 )
 safe_create_remote_file "apidev" "/var/www/index.js" "$APP_CODE"
 
-# Test in development environment - USE STATE-AWARE PROCESS MANAGEMENT
-echo "📝 Starting development server with state awareness..."
-if [Z] check_application_health "apidev" 3000 "node"; then
-    echo "✅ Development server already running and healthy"
+# Test in development environment - USE EXPERT PROCESS MANAGEMENT
+echo "📝 Starting development server with expert verification..."
+if [Z] start_application_properly "apidev" "node index.js" 3000; then
+    echo "✅ Development server started and verified"
 else
-    echo "🚀 Starting development server..."
-    if [Z] safe_bg "apidev" "node index.js" "/var/www" "node"; then
-        echo "✅ Development server started successfully"
-        [Z] check_application_health "apidev" 3000 "node"
-    else
-        echo "❌ Failed to start development server"
-        [Z] diagnose_issue "apidev" --smart
-        exit 1
-    fi
+    echo "❌ Failed to start development server"
+    [Z] diagnose_issue "apidev" --smart
+    exit 1
 fi
 echo "Exit code: $?" # Gate 8
 
@@ -1223,18 +1316,18 @@ production_readiness_check() {
 
 ## 🎯 Core Mantras
 
-1. **"Deploy config before code"** - Env vars must exist
+1. **"Never assume, always verify"** - Multi-signal correlation required
 2. **"Exit codes are truth"** - Check after every command
 3. **"Silent failures are bugs"** - Always investigate with diagnose_issue
-4. **"Check state before action"** - Use check_application_health first
+4. **"Clean slate before start"** - Kill existing processes first
 5. **"Direct creation only"** - Use safe_create_remote_file
-6. **"Verify actual state"** - Use helper functions, not manual queries
+6. **"Specific process verification"** - Use exact commands, not generic patterns
 7. **"Build logs reveal all"** - Use zcli service log --showBuildLogs
-8. **"Dev is manual, prod is automatic"** - Different workflows
-9. **"Use helper functions"** - deploy_with_monitoring not manual zcli
-10. **"Health checks prevent disasters"** - Always for production
+8. **"Unique version tracking"** - Microseconds + random for deployment versions
+9. **"Proper process management"** - start_application_properly not safe_bg
+10. **"Multi-signal verification"** - Process + port + HTTP + logs + API
 11. **"Security scan or don't deploy"** - No exceptions
-12. **"State-aware operations"** - get_development_service, verify_service_exists
+12. **"Port isolation matters"** - APP_PORT not PORT, verify PID ownership
 
 Remember: This is a template-driven system with **distinct development and production workflows**. Development services are persistent coding environments with manual workflows, while production services are automated deployment targets with full build pipelines. Every operation should be verifiable, every deployment progressive, every failure investigated, and every recovery intelligent.
 

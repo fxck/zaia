@@ -87,7 +87,7 @@ if [ $# -eq 1 ] && [ -f "$1" ]; then
     # Apply workarounds for runtime services with startWithoutCode
     echo ""
     echo "🔧 Applying platform workarounds..."
-    sleep 20  # Wait for services to initialize
+    sleep 5  # Wait for services to initialize
 
     WORKAROUND_COUNT=0
     for service in $(yq e '.services[] | select(.startWithoutCode == true) | .hostname' "$YAML_FILE" 2>/dev/null); do
@@ -223,7 +223,7 @@ echo "✅ Service(s) created successfully"
 if [ "$IS_MANAGED" = "false" ]; then
     echo ""
     echo "🔧 Applying platform workarounds..."
-    sleep 20  # Wait for service initialization
+    sleep 5  # Wait for service initialization
 
     apply_workaround "$HOSTNAME"
 
