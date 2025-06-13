@@ -288,6 +288,74 @@ ensure_subdomain() {
     fi
 }
 
+# Ensure subdomain is enabled AND actually working
+ensure_subdomain_verified() {
+    local service="$1"
+    
+    echo "🔍 Enabling and verifying subdomain for $service..."
+    
+    # First, enable the subdomain
+    if ! ensure_subdomain "$service"; then
+        echo "❌ Failed to enable subdomain"
+        return 1
+    fi
+    
+    # Wait a moment for DNS propagation
+    echo "⏳ Waiting for DNS propagation..."
+    sleep 10
+    
+    # Get the subdomain URL
+    sync_env_to_zaia
+    local subdomain=$(get_from_zaia ".services[\"$service\"].subdomain" 2>/dev/null | tr -d '"')
+    
+    if [ -z "$subdomain" ] || [ "$subdomain" = "null" ]; then
+        echo "❌ Subdomain not found in project state"
+        return 1
+    fi
+    
+    local public_url="https://$subdomain"
+    echo "🌐 Testing subdomain: $public_url"
+    
+    # Test if subdomain actually responds (try multiple times)
+    local max_attempts=6
+    local attempt=1
+    
+    while [ $attempt -le $max_attempts ]; do
+        echo "🔄 Attempt $attempt/$max_attempts: Testing $public_url"
+        
+        if curl -sf -m 10 "$public_url" >/dev/null 2>&1; then
+            echo "✅ Subdomain verified and responding!"
+            echo "🌐 Public URL: $public_url"
+            return 0
+        elif curl -sf -m 10 "$public_url/health" >/dev/null 2>&1; then
+            echo "✅ Subdomain verified via health endpoint!"
+            echo "🌐 Public URL: $public_url"
+            return 0
+        else
+            echo "⚠️ Subdomain not responding yet (attempt $attempt/$max_attempts)"
+            if [ $attempt -lt $max_attempts ]; then
+                echo "⏳ Waiting 15 seconds before retry..."
+                sleep 15
+            fi
+        fi
+        
+        attempt=$((attempt + 1))
+    done
+    
+    echo "❌ Subdomain enabled but not responding after $max_attempts attempts"
+    echo "📋 Possible issues:"
+    echo "   - Application not running on the service"
+    echo "   - Port configuration incorrect (should be port 3000 with httpSupport: true)"
+    echo "   - Service still starting up"
+    echo "   - DNS propagation delay"
+    echo ""
+    echo "💡 Try manually:"
+    echo "   curl -v $public_url"
+    echo "   Check if app is running: safe_ssh $service 'ps aux | grep node'"
+    
+    return 1
+}
+
 # Verify service exists in state
 verify_service_exists() {
     local service="$1"
@@ -420,6 +488,21 @@ can_ssh() {
     esac
 }
 
+# Direct SSH without output limiting (for simple commands like curl)
+direct_ssh() {
+    local service="$1"
+    local command="$2"
+    local max_time="${3:-30}"
+
+    if ! can_ssh "$service"; then
+        echo "❌ SSH not available for $service (managed service)" >&2
+        return 1
+    fi
+
+    timeout "$max_time" ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no \
+        "zerops@$service" "$command"
+}
+
 # Safe SSH with output limiting
 safe_ssh() {
     local service="$1"
@@ -432,9 +515,14 @@ safe_ssh() {
         return 1
     fi
 
-    safe_output "$max_lines" "$max_time" \
-        ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no \
-        "zerops@$service" "$command"
+    # For curl commands, use direct SSH to avoid pipe issues
+    if [[ "$command" == *"curl"* ]]; then
+        direct_ssh "$service" "$command" "$max_time"
+    else
+        safe_output "$max_lines" "$max_time" \
+            ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no \
+            "zerops@$service" "$command"
+    fi
 }
 
 # Mask sensitive environment variables
@@ -481,13 +569,32 @@ safe_bg() {
         fi
     fi
 
-    # Verify separately
+    # Verify separately with improved process detection
     echo "⏳ Waiting for process to start..."
     sleep 5
 
-    if safe_ssh "$service" "pgrep -f '$process_pattern' >/dev/null && echo 'RUNNING' || echo 'FAILED'" 1 5 | grep -q "RUNNING"; then
+    # Try multiple detection methods
+    local process_found=false
+    
+    # Method 1: Check for exact pattern
+    if safe_ssh "$service" "pgrep -f '$process_pattern'" 1 5 >/dev/null 2>&1; then
+        process_found=true
+    # Method 2: Check for start command
+    elif safe_ssh "$service" "pgrep -f '$start_cmd'" 1 5 >/dev/null 2>&1; then
+        process_found=true
+    # Method 3: Check for any node process if it's a node app
+    elif [[ "$start_cmd" == *"node"* ]] && safe_ssh "$service" "pgrep node" 1 5 >/dev/null 2>&1; then
+        process_found=true
+    fi
+    
+    if [ "$process_found" = true ]; then
         echo "✅ Process confirmed running"
-
+        
+        # Show process details
+        echo ""
+        echo "📋 Running processes:"
+        safe_ssh "$service" "ps aux | grep -E '$process_pattern|$start_cmd' | grep -v grep" 5 5 || true
+        
         # Show initial logs
         echo ""
         echo "📋 Initial logs:"
@@ -495,6 +602,11 @@ safe_bg() {
         return 0
     else
         echo "❌ Process failed to start"
+        echo ""
+        echo "📋 Process check details:"
+        echo "  Pattern: '$process_pattern'"
+        echo "  Start command: '$start_cmd'"
+        safe_ssh "$service" "ps aux | grep -v grep | grep -v ssh" 10 5 || true
         echo ""
         echo "📋 Error logs:"
         safe_ssh "$service" "tail -50 $work_dir/app.log 2>/dev/null" 50 5
@@ -1513,7 +1625,7 @@ check_deployment_readiness() {
     return 0
 }
 
-export -f safe_output safe_ssh safe_bg get_from_zaia get_service_id validate_dev_service_config
+export -f safe_output direct_ssh safe_ssh safe_bg get_from_zaia get_service_id validate_dev_service_config
 export -f create_workflow_todos auto_create_workflow_todos validate_workflow_complete detect_premature_success
 export -f check_deployment_readiness
 export -f get_available_envs suggest_env_vars needs_restart restart_service_for_envs
@@ -1522,7 +1634,7 @@ export -f check_application_health diagnose_issue diagnose_502_enhanced
 export -f create_safe_yaml validate_service_type validate_service_name get_service_role
 export -f mask_sensitive_output show_env_safe sync_env_to_zaia security_scan
 export -f zaia_exec verify_check get_development_service deployment_exists
-export -f ensure_subdomain verify_service_exists verify_git_state verify_build_success
+export -f ensure_subdomain ensure_subdomain_verified verify_service_exists verify_git_state verify_build_success
 export -f check_deployment_status verify_health generate_service_yaml
 export -f safe_create_remote_file validate_remote_file_content
 export -f monitor_zcli_build deploy_with_monitoring
