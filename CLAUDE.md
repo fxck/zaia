@@ -18,8 +18,8 @@
 ## Current task completed:
 
 Fixed the PORT conflict issue by implementing APP_PORT pattern:
-- PORT environment variable is now RESERVED (never use)
-- All templates use APP_PORT instead of PORT
-- Updated validation to block PORT usage
+- PORT environment variable is RESERVED (never use)
+- APP_PORT can be used freely in both dev and prod services
+- Updated validation to block only PORT usage (APP_PORT is fine)
 - Updated all code examples to use process.env.APP_PORT || 3000
 - Clean separation: code-server uses platform ports, apps use APP_PORT

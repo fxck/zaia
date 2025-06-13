@@ -1339,7 +1339,7 @@ envVariables:
   NODE_ENV: development
   PORT: 3000              # NEVER USE - Reserved and causes conflicts
 
-# ✅ CORRECT - Use APP_PORT for application port configuration
+# ✅ CORRECT - Use APP_PORT instead of PORT
 envVariables:
   NODE_ENV: development
   APP_PORT: 3000          # Clean, no conflicts with platform
