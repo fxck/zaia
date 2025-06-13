@@ -1025,9 +1025,9 @@ safe_create_remote_file "apidev" "/var/www/zerops.yml" "$ZEROPS_CONFIG"
 [S] safe_ssh "apidev" "[ -s /var/www/zerops.yml ] && yq e '.' /var/www/zerops.yml"
 echo "Exit code: $?" # Gate 5
 
-# Deploy config (activates env vars) - USE HELPER FUNCTION
+# Deploy config (activates env vars) - USE SELF-DEPLOYMENT
 [S] safe_ssh "apidev" "git add . && git commit -m 'Zerops config'"
-if ! [Z] deploy_with_monitoring "apidev" "$(get_service_id 'apidev')"; then
+if ! [Z] deploy_self "apidev"; then
     echo "❌ Configuration deployment failed"
     exit 1
 fi

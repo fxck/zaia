@@ -181,6 +181,7 @@ monitor_zcli_build() {
 }
 
 # Deploy service to itself with unique tracking
+# USE FOR: Config activation, environment variable updates, zerops.yml changes
 deploy_self() {
     local service="$1"
     
@@ -213,6 +214,7 @@ deploy_self() {
 }
 
 # Wrapper for deployment with unique tracking and monitoring
+# USE FOR: Dev→Stage deployment (different services)
 deploy_with_monitoring() {
     local dev_service="$1"
     local stage_id="$2"
@@ -327,6 +329,12 @@ wait_for_version_active() {
             local active_version_name=$(echo "$response" | jq -r '.activeAppVersion.name // "none"' 2>/dev/null || echo "none")
             local version_number=$(echo "$response" | jq -r '.versionNumber // "unknown"' 2>/dev/null || echo "unknown")
             
+            # Debug: Show what we're comparing
+            if [ $elapsed -eq 0 ]; then
+                echo "🔍 Looking for version: '$expected_version'"
+                echo "📍 Current active version: '$active_version_name'"
+            fi
+            
             echo "📍 Status: $status, Active Version Name: $active_version_name, Version Number: $version_number (${elapsed}s elapsed)"
             
             # Check if our specific version name is active
@@ -340,7 +348,10 @@ wait_for_version_active() {
                 echo "❌ Deployment failed with status: $status"
                 return 1
             else
-                # Still building/deploying
+                # Still building/deploying or version doesn't match yet
+                if [ "$active_version_name" != "none" ] && [ "$active_version_name" != "$expected_version" ]; then
+                    echo "⏳ Different version active: $active_version_name (waiting for $expected_version)"
+                fi
                 printf "."
             fi
         else
