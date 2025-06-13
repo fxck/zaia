@@ -187,7 +187,7 @@ deploy_with_monitoring() {
     echo "🚀 Deploying from $dev_service to $stage_id..."
 
     # Execute deployment directly without capturing output (let it stream)
-    if safe_ssh "$dev_service" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' >/dev/null 2>&1 && zcli push --serviceId '$stage_id'"; then
+    if safe_ssh "$dev_service" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' >/dev/null 2>&1 && zcli push --serviceId '$stage_id' --deploy-git-folder"; then
         echo "✅ Deployment command completed successfully"
         
         # MANDATORY: Wait for deployment to be fully active before proceeding

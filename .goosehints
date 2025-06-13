@@ -764,7 +764,7 @@ bootstrap_development() {
 
     # Initial deployment
     [S] safe_ssh "$service" "git add -A && git commit -m 'Initial bootstrap'"
-    [S] safe_ssh "$service" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' && zcli push --serviceId \$([Z] get_service_id '$service')"
+    [S] safe_ssh "$service" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' && zcli push --serviceId \$([Z] get_service_id '$service') --deploy-git-folder"
 }
 ```
 
@@ -1168,7 +1168,7 @@ maxContainers: 10
 
 # Deployment
 /var/www/deploy.sh <dev-service>        # Dev to stage deployment
-[S] safe_ssh <dev-service> "cd /var/www && zcli push --serviceId $DEV_ID"  # Dev self-deployment
+[S] safe_ssh <dev-service> "cd /var/www && zcli push --serviceId $DEV_ID --deploy-git-folder"  # Dev self-deployment
 
 # Manual development workflow
 ssh zerops@<dev-service>                # Access dev environment
