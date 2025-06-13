@@ -793,8 +793,8 @@ echo "Exit code: $?" # Gate 0
 RECIPE=$(/var/www/get_recipe.sh express)
 
 # Infrastructure (like docker-compose up)
-# MANDATORY: Create workflow TODO list for dual services
-create_workflow_todos "api"  # Creates todos for apidev + api workflow
+# MANDATORY: Create workflow TODO list for dual services (auto-detect from user request)
+auto_create_workflow_todos "create a simple nodejs app that reads and writes to postgres db"
 
 mkdir -p /var/www/tmp
 create_file "local" "/var/www/tmp/services.yaml" "#yamlPreprocessor=on
@@ -875,7 +875,21 @@ zerops:
 EOF
 )
 
-# Create config safely WITHOUT temp file
+# CRITICAL: Create application structure FIRST (before zerops.yml)
+[S] safe_ssh "apidev" "cd /var/www && npm init -y && npm install express"
+
+# Create basic application code
+APP_CODE=$(cat << 'EOF'
+const express = require('express');
+const app = express();
+app.get('/', (req, res) => res.json({status: 'ok'}));
+app.get('/health', (req, res) => res.sendStatus(200));
+app.listen(process.env.PORT || 3000, '0.0.0.0');
+EOF
+)
+safe_create_remote_file "apidev" "/var/www/index.js" "$APP_CODE"
+
+# NOW create zerops.yml (after package.json exists)
 safe_create_remote_file "apidev" "/var/www/zerops.yml" "$ZEROPS_CONFIG"
 
 # Verify file created
@@ -956,7 +970,17 @@ wait_for_condition "public health check" "curl -sf '$PUBLIC_URL/health'"
 echo "Exit code: $?" # Gate 12 - PRODUCTION READY!
 
 # MANDATORY: Validate workflow completion before declaring success
-validate_workflow_complete || exit 1
+if ! validate_workflow_complete; then
+    echo "🚫 Cannot declare success - workflow incomplete"
+    echo "📋 Complete all required steps before declaring success"
+    exit 1
+fi
+
+# MANDATORY: Check for premature success language
+if ! detect_premature_success ""; then
+    echo "🚫 Blocked premature success declaration"
+    exit 1
+fi
 
 echo ""
 echo "🎉 DEPLOYMENT COMPLETE!"

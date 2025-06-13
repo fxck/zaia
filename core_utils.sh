@@ -41,10 +41,31 @@ safe_create_remote_file() {
     # MANDATORY: Validate development service configurations
     if [[ "$filepath" == *"zerops.yml"* ]]; then
         echo "🔍 Validating zerops.yml configuration..."
+        
+        # Check for temp file usage (violation of direct creation rule)
+        if echo "$content" | grep -q "cat /tmp/"; then
+            echo "❌ ARCHITECTURE VIOLATION: Using temp file + cat pattern"
+            echo "📋 REQUIRED: Use heredoc directly with safe_create_remote_file"
+            echo "❌ WRONG: cat /tmp/file.yml"
+            echo "✅ CORRECT: safe_create_remote_file \"service\" \"/var/www/zerops.yml\" \"\$(cat << 'EOF' ...)"
+            return 1
+        fi
+        
         if ! validate_dev_service_config "$content" "$service"; then
             echo "❌ DEPLOYMENT BLOCKED: Development service configuration invalid"
             echo "📋 Use template from .goosehints with mandatory code-server setup"
             return 1
+        fi
+        
+        # Check if basic application structure exists before deploying zerops.yml
+        if echo "$content" | grep -q "npm install"; then
+            echo "🔍 Checking if package.json exists before deploying..."
+            if ! safe_ssh "$service" "test -f /var/www/package.json" 2>/dev/null; then
+                echo "❌ DEPLOYMENT BLOCKED: Missing package.json"
+                echo "📋 REQUIRED: Create package.json and basic app structure BEFORE deploying zerops.yml"
+                echo "💡 Run: safe_ssh \"$service\" \"cd /var/www && npm init -y\""
+                return 1
+            fi
         fi
     fi
 
@@ -1292,38 +1313,159 @@ validate_dev_service_config() {
     return 0
 }
 
-# Workflow completion enforcement
+# Workflow completion enforcement - technology agnostic
 create_workflow_todos() {
-    local base_name="$1"  # e.g., "api", "app"
+    local base_name="$1"    # e.g., "api", "app", "web"
+    local tech_stack="$2"   # e.g., "nodejs", "python", "php", "ruby", "go"
+    local description="$3"  # e.g., "blog app", "REST API", "web service"
     
-    echo "📋 Creating mandatory workflow TODO list for $base_name services..."
+    # Default values if not provided
+    base_name="${base_name:-app}"
+    tech_stack="${tech_stack:-detected}"
+    description="${description:-application}"
     
-    # Use TodoWrite to create the workflow todos
+    echo "📋 Creating mandatory workflow TODO list for $tech_stack $description..."
+    
+    # Technology-agnostic workflow todos
     echo '[
-        {"id": "create-dev-service", "content": "Create '${base_name}'dev development service with code-server", "status": "pending", "priority": "high"},
-        {"id": "create-prod-service", "content": "Create '${base_name}' production service", "status": "pending", "priority": "high"},
-        {"id": "configure-dev", "content": "Configure development environment and test locally", "status": "pending", "priority": "high"},
-        {"id": "deploy-to-prod", "content": "Deploy from dev to production using /var/www/deploy.sh", "status": "pending", "priority": "high"},
-        {"id": "verify-prod", "content": "Verify production deployment and enable subdomain", "status": "pending", "priority": "high"}
+        {"id": "create-dev-service", "content": "Create '${base_name}'dev development service with code-server for '${tech_stack}' stack", "status": "pending", "priority": "high"},
+        {"id": "create-prod-service", "content": "Create '${base_name}' production service for '${tech_stack}' deployment", "status": "pending", "priority": "high"},
+        {"id": "setup-application", "content": "Create '${description}' with '${tech_stack}' dependencies and configuration", "status": "pending", "priority": "high"},
+        {"id": "configure-dev", "content": "Configure development environment and test '${description}' locally", "status": "pending", "priority": "high"},
+        {"id": "deploy-to-prod", "content": "Deploy '${description}' from dev to production using /var/www/deploy.sh", "status": "pending", "priority": "high"},
+        {"id": "verify-prod", "content": "Verify production deployment of '${description}' and enable public access", "status": "pending", "priority": "high"}
     ]' > /tmp/workflow_todos.json
     
-    echo "✅ Workflow TODO list created - MUST complete all tasks before declaring success"
-    echo "📋 Use TodoWrite and TodoRead to track progress"
+    echo "✅ Workflow TODO list created for $tech_stack $description"
+    echo "📋 MUST complete all tasks before declaring success"
+    echo "🔧 Supports any Zerops technology stack"
 }
 
 validate_workflow_complete() {
-    echo "🔍 Validating workflow completion..."
+    echo "🔍 Validating dev→stage workflow completion..."
     
-    # This would need to integrate with actual TodoRead functionality
-    # For now, just remind about the requirement
-    echo "⚠️ REMINDER: Never declare 'success' until all workflow TODOs are completed"
-    echo "📋 Required for dual services: dev creation → prod creation → configuration → deployment → verification"
+    # Check for proper service pairing
+    local dev_services=$(get_from_zaia '.services | to_entries[] | select(.value.role == "development") | .key')
+    local stage_services=$(get_from_zaia '.services | to_entries[] | select(.value.role != "development" and .value.role != "database" and .value.role != "cache" and .value.role != "storage") | .key')
+    
+    if [ -z "$dev_services" ]; then
+        echo "❌ WORKFLOW INCOMPLETE: No development services found"
+        echo "📋 REQUIRED: Create development service ({name}dev) with code-server"
+        return 1
+    fi
+    
+    if [ -z "$stage_services" ]; then
+        echo "❌ WORKFLOW INCOMPLETE: No stage services found"
+        echo "📋 REQUIRED: Create stage service ({name}) for production deployment"
+        echo "💡 Run: /var/www/deploy.sh <dev-service>"
+        return 1
+    fi
+    
+    # Verify dev/stage pairing exists
+    local has_valid_pair=false
+    for dev_service in $dev_services; do
+        local base_name="${dev_service%dev}"  # Remove 'dev' suffix
+        if echo "$stage_services" | grep -q "^${base_name}$"; then
+            has_valid_pair=true
+            break
+        fi
+    done
+    
+    if [ "$has_valid_pair" = false ]; then
+        echo "❌ WORKFLOW INCOMPLETE: No valid dev/stage pairs found"
+        echo "📋 REQUIRED: Ensure {name}dev + {name} service pairing"
+        echo "   Example: blogdev + blog, apidev + api, shopdev + shop"
+        return 1
+    fi
+    
+    # Check if stage services have public access (indicating successful deployment)
+    local has_stage_deployment=false
+    for service in $stage_services; do
+        local subdomain=$(get_from_zaia ".services[\"$service\"].subdomain // \"\"")
+        if [ -n "$subdomain" ] && [ "$subdomain" != "null" ]; then
+            has_stage_deployment=true
+            break
+        fi
+    done
+    
+    if [ "$has_stage_deployment" = false ]; then
+        echo "❌ WORKFLOW INCOMPLETE: Stage services exist but not deployed"
+        echo "📋 REQUIRED: Deploy to stage and enable public access"
+        echo "💡 Run: /var/www/deploy.sh <dev-service>"
+        return 1
+    fi
+    
+    echo "✅ Workflow complete: Dev/stage pairing with successful deployment verified"
+    return 0
+}
+
+# Detect premature success declaration
+detect_premature_success() {
+    local message="$1"
+    
+    # Check for "next steps" language indicating incomplete workflow
+    if echo "$message" | grep -qi "next steps\|deploy to production\|run.*deploy\.sh"; then
+        echo "❌ PREMATURE SUCCESS DETECTED"
+        echo "📋 'Next Steps' language indicates incomplete workflow"
+        echo "🚫 BLOCKED: Do not suggest production deployment as 'next step'"
+        echo "✅ REQUIRED: Actually execute /var/www/deploy.sh and verify production"
+        return 1
+    fi
     
     return 0
 }
 
+# Auto-detect technology and description from user request
+auto_create_workflow_todos() {
+    local user_request="$1"
+    local base_name="app"
+    local tech_stack="detected"
+    local description="application"
+    
+    # Detect technology stack from user request
+    if echo "$user_request" | grep -qi "node\|javascript\|express\|npm"; then
+        tech_stack="nodejs"
+    elif echo "$user_request" | grep -qi "python\|django\|flask\|pip"; then
+        tech_stack="python"
+    elif echo "$user_request" | grep -qi "php\|laravel\|composer"; then
+        tech_stack="php"
+    elif echo "$user_request" | grep -qi "ruby\|rails\|gem"; then
+        tech_stack="ruby"
+    elif echo "$user_request" | grep -qi "go\|golang"; then
+        tech_stack="go"
+    elif echo "$user_request" | grep -qi "java\|spring\|maven"; then
+        tech_stack="java"
+    elif echo "$user_request" | grep -qi "rust\|cargo"; then
+        tech_stack="rust"
+    fi
+    
+    # Detect application type/description
+    if echo "$user_request" | grep -qi "api\|rest\|endpoint"; then
+        description="REST API"
+        base_name="api"
+    elif echo "$user_request" | grep -qi "blog\|cms"; then
+        description="blog application"
+        base_name="blog"
+    elif echo "$user_request" | grep -qi "shop\|ecommerce\|store"; then
+        description="e-commerce application"
+        base_name="shop"
+    elif echo "$user_request" | grep -qi "chat\|messaging"; then
+        description="chat application"
+        base_name="chat"
+    elif echo "$user_request" | grep -qi "web\|website\|frontend"; then
+        description="web application"
+        base_name="web"
+    elif echo "$user_request" | grep -qi "database\|crud"; then
+        description="database application"
+        base_name="app"
+    fi
+    
+    echo "🤖 Auto-detected: $tech_stack $description (service: ${base_name}dev + $base_name)"
+    create_workflow_todos "$base_name" "$tech_stack" "$description"
+}
+
 export -f safe_output safe_ssh safe_bg get_from_zaia get_service_id validate_dev_service_config
-export -f create_workflow_todos validate_workflow_complete
+export -f create_workflow_todos auto_create_workflow_todos validate_workflow_complete detect_premature_success
 export -f get_available_envs suggest_env_vars needs_restart restart_service_for_envs
 export -f apply_workaround can_ssh has_live_reload monitor_reload
 export -f check_application_health diagnose_issue diagnose_502_enhanced
