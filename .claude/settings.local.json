@@ -3,7 +3,8 @@
     "allow": [
       "Bash(grep:*)",
       "Bash(rm:*)",
-      "Bash(chmod:*)"
+      "Bash(chmod:*)",
+      "Bash(/Users/fxck/www/zaia/test_deployment_fixes.sh)"
     ],
     "deny": []
   }

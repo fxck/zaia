@@ -259,8 +259,7 @@ echo "════════════════════════�
 if ! safe_ssh "$DEV" "cd /var/www && [ -d .git ]" 2>/dev/null; then
     echo "📝 Initializing git repository..."
     safe_ssh "$DEV" "cd /var/www && git init"
-    safe_ssh "$DEV" "cd /var/www && git config user.email 'deploy@zerops.local'"
-    safe_ssh "$DEV" "cd /var/www && git config user.name 'Zerops Deploy'"
+    safe_ssh "$DEV" "cd /var/www && git config user.email 'deploy@zerops.local' && git config user.name 'Zerops Deploy'"
 fi
 
 # Check git status

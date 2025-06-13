@@ -604,6 +604,10 @@ verify_deployment_complete() {
 # Version tracking: Use unique timestamps with microseconds + random
 # Silent deploy fail: Multi-signal verification with build logs + API + process check
 # Premature success: Never trust single signals, always correlate multiple data points
+# Git config SSH: Chain commands with && to avoid multiple SSH calls
+# Token env missing: Always validate ZEROPS_ACCESS_TOKEN before deploy_self
+# Service ID validation: Check format with regex before using in zcli commands
+# SSH timeout: Add timeout wrapper to prevent hanging deployments
 ```
 
 ## 🛠️ Core Functions Reference

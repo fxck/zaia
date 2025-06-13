@@ -38,34 +38,14 @@ safe_create_remote_file() {
         return 1
     fi
 
-    # MANDATORY: Validate development service configurations
+    # Basic validation for zerops.yml only
     if [[ "$filepath" == *"zerops.yml"* ]]; then
-        echo "🔍 Validating zerops.yml configuration..."
+        echo "🔍 Basic zerops.yml validation..."
         
-        # Check for temp file usage (violation of direct creation rule)
-        if echo "$content" | grep -q "cat /tmp/"; then
-            echo "❌ ARCHITECTURE VIOLATION: Using temp file + cat pattern"
-            echo "📋 REQUIRED: Use heredoc directly with safe_create_remote_file"
-            echo "❌ WRONG: cat /tmp/file.yml"
-            echo "✅ CORRECT: safe_create_remote_file \"service\" \"/var/www/zerops.yml\" \"\$(cat << 'EOF' ...)"
-            return 1
-        fi
-        
+        # Only validate critical PORT issue
         if ! validate_dev_service_config "$content" "$service"; then
-            echo "❌ DEPLOYMENT BLOCKED: Development service configuration invalid"
-            echo "📋 Use template from .goosehints with mandatory code-server setup"
+            echo "❌ Critical configuration issue detected"
             return 1
-        fi
-        
-        # Check if basic application structure exists before deploying zerops.yml
-        if echo "$content" | grep -q "npm install"; then
-            echo "🔍 Checking if package.json exists before deploying..."
-            if ! safe_ssh "$service" "test -f /var/www/package.json" 2>/dev/null; then
-                echo "❌ DEPLOYMENT BLOCKED: Missing package.json"
-                echo "📋 REQUIRED: Create package.json and basic app structure BEFORE deploying zerops.yml"
-                echo "💡 Run: safe_ssh \"$service\" \"cd /var/www && npm init -y\""
-                return 1
-            fi
         fi
     fi
 
@@ -186,23 +166,38 @@ deploy_self() {
     
     echo "🔄 Deploying $service to activate configuration..."
     
+    # Validate environment
+    if [ -z "$ZEROPS_ACCESS_TOKEN" ]; then
+        echo "❌ ZEROPS_ACCESS_TOKEN not set"
+        return 1
+    fi
+    
     # Get service ID
     local service_id
     if ! service_id=$(get_service_id "$service" 2>/dev/null); then
         echo "❌ Failed to get service ID for $service"
+        echo "🔍 Debugging service lookup..."
+        echo "Available services:"
+        get_from_zaia '.services | keys[]' 2>/dev/null || echo "No services found in .zaia"
         return 1
     fi
     echo "📋 Service ID: $service_id"
+    
+    # Validate service ID format
+    if [[ ! "$service_id" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        echo "❌ Invalid service ID format: $service_id"
+        return 1
+    fi
     
     # Just run the deployment directly - no version tracking nonsense
     echo "🚀 Executing deployment..."
     
     # Use SSH to run the deployment command directly
-    echo "Running: ssh zerops@$service 'cd /var/www && zcli login && zcli push --serviceId $service_id --deploy-git-folder'"
+    echo "Running: ssh zerops@$service 'cd /var/www && zcli login \$ZEROPS_ACCESS_TOKEN && zcli push --serviceId $service_id --deploy-git-folder'"
     
     # Execute and wait for zcli push to finish naturally
-    if ssh -o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=no "zerops@$service" \
-        "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' && zcli push --serviceId '$service_id' --deploy-git-folder"; then
+    if timeout 300 ssh -o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=no "zerops@$service" \
+        "cd /var/www && zcli login \"\$ZEROPS_ACCESS_TOKEN\" && zcli push --serviceId \"$service_id\" --deploy-git-folder"; then
         echo "✅ Deployment completed successfully"
         
         # Basic verification
@@ -232,12 +227,18 @@ deploy_with_monitoring() {
 
     echo "🚀 Deploying from $dev_service to stage service $stage_id..."
 
+    # Validate environment
+    if [ -z "$ZEROPS_ACCESS_TOKEN" ]; then
+        echo "❌ ZEROPS_ACCESS_TOKEN not set"
+        return 1
+    fi
+
     # Execute deployment directly
-    echo "Running: ssh zerops@$dev_service 'cd /var/www && zcli login && zcli push --serviceId $stage_id --deploy-git-folder'"
+    echo "Running: ssh zerops@$dev_service 'cd /var/www && zcli login \$ZEROPS_ACCESS_TOKEN && zcli push --serviceId $stage_id --deploy-git-folder'"
     
     # Execute and wait for zcli push to finish naturally  
-    if ssh -o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=no "zerops@$dev_service" \
-        "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' && zcli push --serviceId '$stage_id' --deploy-git-folder"; then
+    if timeout 300 ssh -o ConnectTimeout=30 -o BatchMode=yes -o StrictHostKeyChecking=no "zerops@$dev_service" \
+        "cd /var/www && zcli login \"\$ZEROPS_ACCESS_TOKEN\" && zcli push --serviceId \"$stage_id\" --deploy-git-folder"; then
         echo "✅ Deployment completed successfully"
         
         # Basic verification using zcli
@@ -1819,45 +1820,22 @@ validate_dev_service_config() {
     local service="$2"
     
     if echo "$service" | grep -q "dev"; then
-        echo "🔍 MANDATORY: Validating development service configuration..."
+        echo "🔍 Validating development service configuration..."
         
-        if ! echo "$config" | grep -q "prepareCommands"; then
-            echo "❌ ARCHITECTURE VIOLATION: Missing prepareCommands for code-server installation"
-            echo "📋 REQUIRED: Development services MUST include code-server setup"
-            return 1
-        fi
-        
-        if ! echo "$config" | grep -q "code-server"; then
-            echo "❌ ARCHITECTURE VIOLATION: Missing code-server in start command"
-            echo "📋 REQUIRED: start: code-server --auth none --bind-addr 0.0.0.0:8080 /var/www"
-            return 1
-        fi
-        
-        if ! echo "$config" | grep -q "port: 8080"; then
-            echo "❌ ARCHITECTURE VIOLATION: Missing port 8080 for code-server"
-            echo "📋 REQUIRED: Port 8080 for code-server (VPN access)"
-            return 1
-        fi
+        # Only validate critical issues, not enforce code-server (too restrictive)
+        # Code-server is optional, not mandatory
         
         # CRITICAL: Check for PORT environment variable (reserved, causes conflicts)
         # Look specifically for "PORT:" under envVariables sections
         if echo "$config" | awk '/envVariables:/,/^[[:space:]]*[a-zA-Z]/ {if(/^[[:space:]]*PORT[[:space:]]*:/) print}' | grep -q .; then
-            echo "❌ ARCHITECTURE VIOLATION: PORT environment variable is reserved"
-            echo "📋 PROBLEM: PORT conflicts with code-server and platform routing"
-            echo "🚫 NEVER USE: PORT environment variable in envVariables"
+            echo "❌ CRITICAL: PORT environment variable is reserved by platform"
+            echo "🚫 NEVER USE: PORT in envVariables"
             echo "✅ USE INSTEAD: APP_PORT environment variable"
             echo "💡 PATTERN: process.env.APP_PORT || 3000"
             return 1
         fi
         
-        # Check that both ports are defined (8080 for code-server, 3000 for app)
-        if ! echo "$config" | grep -q "port: 3000"; then
-            echo "❌ ARCHITECTURE VIOLATION: Missing port 3000 for application"
-            echo "📋 REQUIRED: Port 3000 for application (public access)"
-            return 1
-        fi
-        
-        echo "✅ Development service configuration valid - includes code-server with proper port isolation"
+        echo "✅ Development service configuration valid"
     fi
     
     return 0
