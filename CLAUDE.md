@@ -14,3 +14,12 @@
 2. **Make up deployment scenarios** - Don't pretend to be running workflows
 3. **Get confused about my role** - I'm helping build the system, not using it
 4. **Write instructions for other AIs** - The .goosehints file already handles that
+
+## Current task completed:
+
+Fixed the PORT conflict issue by implementing APP_PORT pattern:
+- PORT environment variable is now RESERVED (never use)
+- All templates use APP_PORT instead of PORT
+- Updated validation to block PORT usage
+- Updated all code examples to use process.env.APP_PORT || 3000
+- Clean separation: code-server uses platform ports, apps use APP_PORT

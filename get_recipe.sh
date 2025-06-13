@@ -113,7 +113,7 @@ zerops:
         - port: 3000
           httpSupport: true
       envVariables:
-        PORT: 3000
+        APP_PORT: 3000
         NODE_ENV: production
         DATABASE_URL: ${db_connectionString}
       start: node dist/index.js

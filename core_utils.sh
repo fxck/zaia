@@ -240,13 +240,97 @@ wait_for_service_ready() {
         2
 }
 
+# Check if service is currently building/deploying
+is_service_building() {
+    local service_id="$1"
+    
+    # Check build logs to see if build is active
+    local build_logs=$(zcli service log --serviceId "$service_id" --show-build-logs --limit 10 --format SHORT 2>/dev/null || echo "")
+    
+    if [ -z "$build_logs" ]; then
+        return 1  # No build logs = not building
+    fi
+    
+    # Look for recent build activity (within last few lines)
+    # Active builds typically show ongoing progress, completion messages, or recent timestamps
+    local recent_activity=$(echo "$build_logs" | tail -3 | grep -E "(Building|Deploying|Downloading|Installing|Running|Copying|Step [0-9]+|DEPLOYED|FAILED)" || echo "")
+    
+    if [ -n "$recent_activity" ]; then
+        # Check if the recent activity indicates completion or ongoing work
+        if echo "$recent_activity" | grep -qE "(DEPLOYED|BUILD FAILED|DEPLOYMENT FAILED)"; then
+            return 1  # Build completed (success or failure)
+        else
+            echo "🔄 Build activity detected:"
+            echo "$recent_activity" | sed 's/^/  /'
+            return 0  # Still building
+        fi
+    else
+        return 1  # No recent build activity
+    fi
+}
+
 wait_for_deployment_active() {
     local service_id="$1"
-    wait_for_condition \
-        "deployment to be active" \
-        "zcli service log --serviceId '$service_id' --limit 1 >/dev/null 2>&1" \
-        60 \
-        5
+    
+    echo "⏳ Waiting for deployment to be active..."
+    
+    # First check if there are active builds using build logs
+    if is_service_building "$service_id"; then
+        echo "📋 Build/deployment in progress, waiting for completion..."
+        
+        local max_wait=600  # 10 minutes for builds
+        local elapsed=0
+        
+        while [ $elapsed -lt $max_wait ]; do
+            if ! is_service_building "$service_id"; then
+                echo ""
+                echo "✅ Build/deployment completed"
+                break
+            fi
+            
+            printf "."
+            sleep 15
+            elapsed=$((elapsed + 15))
+        done
+        
+        if [ $elapsed -ge $max_wait ]; then
+            echo ""
+            echo "⚠️ Build timeout after ${max_wait}s"
+            return 1
+        fi
+    fi
+    
+    # Now verify service is responsive by checking if we can get runtime logs
+    echo "🔍 Verifying service is active..."
+    local max_wait=60  # 1 minute for service activation
+    local elapsed=0
+    
+    while [ $elapsed -lt $max_wait ]; do
+        # Try to get runtime logs (not build logs) - this indicates service is active
+        if zcli service log --serviceId "$service_id" --limit 1 >/dev/null 2>&1; then
+            echo "✅ Service is active and responding"
+            return 0
+        fi
+        
+        printf "."
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+    
+    echo ""
+    echo "⚠️ Service not responding after ${max_wait}s"
+    echo "📋 Checking build logs for issues..."
+    
+    # Show recent build logs to help debug
+    local build_logs=$(zcli service log --serviceId "$service_id" --show-build-logs --limit 20 --format SHORT 2>/dev/null || echo "")
+    if [ -n "$build_logs" ]; then
+        echo "Recent build activity:"
+        echo "$build_logs" | tail -10 | sed 's/^/  /'
+    else
+        echo "No build logs available"
+    fi
+    
+    return 1
 }
 
 # Get development service from state
@@ -271,19 +355,61 @@ deployment_exists() {
 # Ensure service has subdomain
 ensure_subdomain() {
     local service="$1"
-    local service_id=$(get_service_id "$service")
-
-    echo "🌐 Enabling subdomain for $service (ID: $service_id)..."
     
-    # Try to enable subdomain - will succeed even if already enabled
-    if zcli service enable-subdomain --serviceId "$service_id"; then
-        echo "✅ Subdomain enabled successfully"
-        sleep 5
-        sync_env_to_zaia
+    echo "🌐 Processing subdomain for $service..."
+    
+    # First check if service exists and get ID
+    if ! verify_service_exists "$service"; then
+        echo "❌ Service $service not found in project state"
+        return 1
+    fi
+    
+    local service_id=$(get_service_id "$service")
+    echo "📋 Service ID: $service_id"
+    
+    # Check if subdomain already exists
+    sync_env_to_zaia
+    local existing_subdomain=$(get_from_zaia ".services[\"$service\"].subdomain" 2>/dev/null | tr -d '"')
+    
+    if [ -n "$existing_subdomain" ] && [ "$existing_subdomain" != "null" ]; then
+        echo "✅ Subdomain already exists: $existing_subdomain"
         return 0
+    fi
+    
+    echo "🔧 Enabling subdomain for $service (ID: $service_id)..."
+    
+    # Enable subdomain with error handling
+    if zcli service enable-subdomain --serviceId "$service_id" 2>&1; then
+        echo "✅ Subdomain enable command succeeded"
+        
+        # Wait for subdomain to be provisioned
+        echo "⏳ Waiting for subdomain provisioning..."
+        sleep 10
+        
+        # Refresh state and check
+        sync_env_to_zaia
+        local new_subdomain=$(get_from_zaia ".services[\"$service\"].subdomain" 2>/dev/null | tr -d '"')
+        
+        if [ -n "$new_subdomain" ] && [ "$new_subdomain" != "null" ]; then
+            echo "✅ Subdomain provisioned: $new_subdomain"
+            return 0
+        else
+            echo "⚠️ Subdomain command succeeded but subdomain not yet visible"
+            echo "   This may take a few minutes to propagate"
+            return 0
+        fi
     else
-        echo "❌ Failed to enable subdomain"
-        echo "💡 Try manually: zcli service enable-subdomain --serviceId $service_id"
+        local exit_code=$?
+        echo "❌ Failed to enable subdomain (exit code: $exit_code)"
+        echo ""
+        echo "📋 Debugging info:"
+        echo "   Service: $service"
+        echo "   Service ID: $service_id"
+        echo "   Command: zcli service enable-subdomain --serviceId $service_id"
+        echo ""
+        echo "💡 Try manually:"
+        echo "   zcli service enable-subdomain --serviceId $service_id"
+        echo "   zcli service list | grep $service"
         return 1
     fi
 }
@@ -734,7 +860,7 @@ suggest_env_vars() {
     # Technology-agnostic suggestions
     echo ""
     echo "🎯 Common environment variables:"
-    echo "  PORT: 3000"
+    echo "  APP_PORT: 3000          # Use APP_PORT, never PORT (reserved)"
     echo "  NODE_ENV: production"
     echo "  LOG_LEVEL: info"
     echo "  API_PREFIX: /api"
@@ -1428,12 +1554,13 @@ validate_dev_service_config() {
             return 1
         fi
         
-        # CRITICAL: Check for PORT environment variable conflict
+        # CRITICAL: Check for PORT environment variable (reserved, causes conflicts)
         if echo "$config" | grep -q "PORT:"; then
-            echo "❌ ARCHITECTURE VIOLATION: PORT environment variable set in development service"
-            echo "📋 PROBLEM: PORT conflicts with code-server, application should default to 3000"
-            echo "🚫 REMOVE: PORT environment variable from development services"
-            echo "✅ CORRECT: Let application default to port 3000, code-server uses 8080"
+            echo "❌ ARCHITECTURE VIOLATION: PORT environment variable is reserved"
+            echo "📋 PROBLEM: PORT conflicts with code-server and platform routing"
+            echo "🚫 NEVER USE: PORT environment variable"
+            echo "✅ USE INSTEAD: APP_PORT environment variable"
+            echo "💡 PATTERN: process.env.APP_PORT || 3000"
             return 1
         fi
         
@@ -1638,4 +1765,4 @@ export -f ensure_subdomain ensure_subdomain_verified verify_service_exists verif
 export -f check_deployment_status verify_health generate_service_yaml
 export -f safe_create_remote_file validate_remote_file_content
 export -f monitor_zcli_build deploy_with_monitoring
-export -f wait_for_condition wait_for_service_ready wait_for_deployment_active
+export -f wait_for_condition wait_for_service_ready is_service_building wait_for_deployment_active

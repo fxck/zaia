@@ -390,7 +390,7 @@ EOF
         httpGet:
           port: 3000
           path: /health"
-        env_vars="NODE_ENV: production\n        PORT: 3000"
+        env_vars="NODE_ENV: production\n        APP_PORT: 3000"
     fi
 
     # Create zerops.yml with role-specific configuration
@@ -914,7 +914,7 @@ const express = require('express');
 const app = express();
 app.get('/', (req, res) => res.json({status: 'ok'}));
 app.get('/health', (req, res) => res.sendStatus(200));
-app.listen(process.env.PORT || 3000, '0.0.0.0');
+app.listen(process.env.APP_PORT || 3000, '0.0.0.0');
 EOF
 )
 safe_create_remote_file "apidev" "/var/www/index.js" "$APP_CODE"
@@ -945,7 +945,7 @@ const express = require('express');
 const app = express();
 app.get('/', (req, res) => res.json({status: 'ok'}));
 app.get('/health', (req, res) => res.sendStatus(200));
-app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
+app.listen(process.env.APP_PORT || 3000, '0.0.0.0', () => {
   console.log('Server running on port 3000 - access via SSH');
 });
 EOF
@@ -1327,31 +1327,37 @@ echo "🌐 Code-server accessible at: https://$PUBLIC_URL"
 4. Sets proper port binding to 0.0.0.0:8080
 5. Uses `start` command to auto-launch code-server
 
-**🚨 CRITICAL: Port Isolation (Prevents Application Hijacking)**
+**🚨 CRITICAL: Port Management (Clean and Simple)**
 
-Development services use TWO ports with strict isolation:
-- **Port 8080**: Code-server (VPN access only) - NEVER set PORT environment variable
-- **Port 3000**: Application (can be shared publicly) - application defaults to 3000
+Development services use TWO ports with clear separation:
+- **Port 8080**: Code-server (VPN access only)
+- **Port 3000**: Application (can be shared publicly)
 
 ```bash
-# ❌ WRONG - PORT environment variable conflicts with code-server
+# ❌ WRONG - PORT environment variable is RESERVED
 envVariables:
   NODE_ENV: development
-  PORT: 3000              # This hijacks application and conflicts with code-server
+  PORT: 3000              # NEVER USE - Reserved and causes conflicts
 
-# ✅ CORRECT - No PORT environment variable, application defaults to 3000
+# ✅ CORRECT - Use APP_PORT for application port configuration
 envVariables:
   NODE_ENV: development
-  # NO PORT variable - let application default to 3000
+  APP_PORT: 3000          # Clean, no conflicts with platform
 ```
 
-**Why PORT conflicts occur:**
-1. Code-server runs on 8080 (set in start command)
-2. Application should default to 3000 (in application code: `process.env.PORT || 3000`)
-3. If PORT=3000 is set as env var, it can interfere with port bindings
-4. Manual `export PORT=3000` in SSH sessions creates conflicts
+**Why PORT is reserved:**
+1. Code-server uses platform port management
+2. Zerops platform reserves PORT for internal routing
+3. PORT conflicts with multiple platform services
 
-**The solution**: Development services NEVER set PORT environment variable.
+**The solution**: Always use APP_PORT, never PORT. Update application code:
+```javascript
+// ✅ CORRECT
+app.listen(process.env.APP_PORT || 3000, '0.0.0.0');
+
+// ❌ WRONG  
+app.listen(process.env.PORT || 3000, '0.0.0.0');
+```
 
 **Alternative: Manual installation if prepareCommands fails:**
 
