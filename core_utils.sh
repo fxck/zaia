@@ -194,11 +194,35 @@ deploy_self() {
     local version_name="deploy-$(date +%Y%m%d-%H%M%S)-$(date +%N | cut -c1-3)-$(shuf -i 1000-9999 -n1)"
     echo "📋 Unique version: $version_name"
     
-    # Execute deployment with version tracking
-    echo "🔍 Executing: zcli push --serviceId '$service_id' --deploy-git-folder --version-name '$version_name'"
+    # Execute deployment step by step with explicit checks
+    echo "🔍 Step 1: Checking SSH connectivity..."
+    if ! safe_ssh "$service" "echo 'SSH test successful'"; then
+        echo "❌ SSH connection failed"
+        return 1
+    fi
     
-    if safe_ssh "$service" "cd /var/www && zcli login '$ZEROPS_ACCESS_TOKEN' >/dev/null 2>&1 && echo 'zcli login successful' && zcli push --serviceId '$service_id' --deploy-git-folder --version-name '$version_name'"; then
-        echo "✅ Self-deployment command completed successfully"
+    echo "🔍 Step 2: Checking working directory..."
+    safe_ssh "$service" "cd /var/www && pwd && ls -la" 50 10
+    
+    echo "🔍 Step 3: Checking git status..."
+    safe_ssh "$service" "cd /var/www && git status" 20 5
+    
+    echo "🔍 Step 4: Authenticating with Zerops..."
+    if ! safe_ssh "$service" "zcli login '$ZEROPS_ACCESS_TOKEN'"; then
+        echo "❌ zcli authentication failed"
+        return 1
+    fi
+    echo "✅ zcli authentication successful"
+    
+    echo "🔍 Step 5: Executing deployment..."
+    echo "Command: zcli push --serviceId '$service_id' --deploy-git-folder --version-name '$version_name'"
+    
+    # Execute deployment and capture output
+    local deploy_output
+    if deploy_output=$(safe_ssh "$service" "cd /var/www && zcli push --serviceId '$service_id' --deploy-git-folder --version-name '$version_name'" 200 300); then
+        echo "✅ zcli push command executed"
+        echo "📋 Deploy output:"
+        echo "$deploy_output"
         
         # MANDATORY: Wait for THIS SPECIFIC version to be active
         echo "⏳ Waiting for version $version_name to be fully active..."
@@ -211,9 +235,8 @@ deploy_self() {
         fi
     else
         local exit_code=$?
-        echo "❌ Self-deployment command failed with exit code: $exit_code"
-        echo "🔍 Debugging deployment failure..."
-        safe_ssh "$service" "cd /var/www && pwd && ls -la && git status" 100 10
+        echo "❌ zcli push failed with exit code: $exit_code"
+        echo "📋 Output was: $deploy_output"
         return 1
     fi
 }
