@@ -830,14 +830,18 @@ zerops:
     run:
       base: nodejs@22
       os: ubuntu                   # Full OS for development
+      prepareCommands:
+        - curl -fsSL https://code-server.dev/install.sh | sh -s -- --method=standalone
+        - sudo chown -R zerops:zerops /home/zerops/.local/bin/code-server
       ports:
-        - port: 3000
+        - port: 8080                    # Code-server (VPN access only)
+        - port: 3000                    # Dev server (can be shared publicly)
           httpSupport: true
       envVariables:
         NODE_ENV: development
         DATABASE_URL: ${db_connectionString}
         JWT_SECRET: ${JWT_SECRET}
-      # NO START COMMAND - manual development
+      start: code-server --auth none --bind-addr 0.0.0.0:8080 /var/www
 
   - setup: api
     build:
@@ -1196,7 +1200,8 @@ zerops:
         - curl -fsSL https://code-server.dev/install.sh | sh -s -- --method=standalone
         - sudo chown -R zerops:zerops /home/zerops/.local/bin/code-server
       ports:
-        - port: 8080
+        - port: 8080                    # Code-server (VPN access only)
+        - port: 3000                    # Dev server (can be shared publicly)
           httpSupport: true
       envVariables:
         NODE_ENV: development
@@ -1224,7 +1229,8 @@ zerops:
         - curl -fsSL https://code-server.dev/install.sh | sh -s -- --method=standalone
         - sudo chown -R zerops:zerops /home/zerops/.local/bin/code-server
       ports:
-        - port: 8080
+        - port: 8080                    # Code-server (VPN access only)
+        - port: 3000                    # Dev server (can be shared publicly)
           httpSupport: true
       envVariables:
         NODE_ENV: development

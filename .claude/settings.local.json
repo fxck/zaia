@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(grep:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(chmod:*)"
     ],
     "deny": []
   }
