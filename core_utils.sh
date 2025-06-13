@@ -1824,10 +1824,11 @@ validate_dev_service_config() {
         fi
         
         # CRITICAL: Check for PORT environment variable (reserved, causes conflicts)
-        if echo "$config" | grep -q "PORT:"; then
+        # Look specifically for "PORT:" under envVariables sections
+        if echo "$config" | awk '/envVariables:/,/^[[:space:]]*[a-zA-Z]/ {if(/^[[:space:]]*PORT[[:space:]]*:/) print}' | grep -q .; then
             echo "❌ ARCHITECTURE VIOLATION: PORT environment variable is reserved"
             echo "📋 PROBLEM: PORT conflicts with code-server and platform routing"
-            echo "🚫 NEVER USE: PORT environment variable"
+            echo "🚫 NEVER USE: PORT environment variable in envVariables"
             echo "✅ USE INSTEAD: APP_PORT environment variable"
             echo "💡 PATTERN: process.env.APP_PORT || 3000"
             return 1
