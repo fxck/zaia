@@ -322,18 +322,18 @@ wait_for_version_active() {
         local response=$(curl -sf -H "Authorization: Bearer $ZEROPS_ACCESS_TOKEN" "$api_url" 2>/dev/null || echo '{}')
         
         if [ -n "$response" ] && [ "$response" != '{}' ]; then
-            # Extract current version number and status
-            local current_version=$(echo "$response" | jq -r '.versionNumber // "unknown"' 2>/dev/null || echo "unknown")
+            # Extract current status and active version name
             local status=$(echo "$response" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown") 
-            local active_version=$(echo "$response" | jq -r '.activeAppVersion.id // "none"' 2>/dev/null || echo "none")
+            local active_version_name=$(echo "$response" | jq -r '.activeAppVersion.name // "none"' 2>/dev/null || echo "none")
+            local version_number=$(echo "$response" | jq -r '.versionNumber // "unknown"' 2>/dev/null || echo "unknown")
             
-            echo "📍 Status: $status, Version: $current_version, Active: $active_version (${elapsed}s elapsed)"
+            echo "📍 Status: $status, Active Version Name: $active_version_name, Version Number: $version_number (${elapsed}s elapsed)"
             
-            # Check if our version is active
-            if [ "$current_version" = "$expected_version" ] && [ "$status" = "READY" ]; then
+            # Check if our specific version name is active
+            if [ "$active_version_name" = "$expected_version" ] && [ "$status" = "READY" ]; then
                 echo "✅ Version '$expected_version' is now active and ready"
                 return 0
-            elif [ "$current_version" = "$expected_version" ] && [ "$status" = "RUNNING" ]; then
+            elif [ "$active_version_name" = "$expected_version" ] && [ "$status" = "RUNNING" ]; then
                 echo "✅ Version '$expected_version' is running and active"
                 return 0
             elif [ "$status" = "FAILED" ] || [ "$status" = "ERROR" ]; then
@@ -359,9 +359,11 @@ wait_for_version_active() {
     # Show final state for debugging
     local final_response=$(curl -sf -H "Authorization: Bearer $ZEROPS_ACCESS_TOKEN" "$api_url" 2>/dev/null || echo '{}')
     if [ -n "$final_response" ] && [ "$final_response" != '{}' ]; then
-        local final_version=$(echo "$final_response" | jq -r '.versionNumber // "unknown"' 2>/dev/null || echo "unknown")
+        local final_active_name=$(echo "$final_response" | jq -r '.activeAppVersion.name // "unknown"' 2>/dev/null || echo "unknown")
         local final_status=$(echo "$final_response" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown")
-        echo "  Version: $final_version"
+        local final_version_number=$(echo "$final_response" | jq -r '.versionNumber // "unknown"' 2>/dev/null || echo "unknown")
+        echo "  Active Version Name: $final_active_name"
+        echo "  Version Number: $final_version_number"
         echo "  Status: $final_status"
     else
         echo "  Unable to query final state"
@@ -836,10 +838,10 @@ verify_deployment_complete() {
         local response=$(curl -sf -H "Authorization: Bearer $ZEROPS_ACCESS_TOKEN" "$api_url" 2>/dev/null || echo '{}')
         
         if [ -n "$response" ] && [ "$response" != '{}' ]; then
-            local current_version=$(echo "$response" | jq -r '.versionNumber // "unknown"' 2>/dev/null || echo "unknown")
+            local active_version_name=$(echo "$response" | jq -r '.activeAppVersion.name // "unknown"' 2>/dev/null || echo "unknown")
             local status=$(echo "$response" | jq -r '.status // "unknown"' 2>/dev/null || echo "unknown")
             
-            if [ "$current_version" = "$expected_version" ] && [[ "$status" =~ ^(READY|RUNNING)$ ]]; then
+            if [ "$active_version_name" = "$expected_version" ] && [[ "$status" =~ ^(READY|RUNNING)$ ]]; then
                 echo "✅ Managed service deployment verified via API"
                 return 0
             fi
